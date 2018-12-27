@@ -1,0 +1,16 @@
+model:
+    init_weights: True
+    pretrained_path: ''
+
+images_root_dir: '/home/ys/projects/human-pose-estimation.pytorch/data/coco/images/'
+annotation_root_dir: '/home/ys/projects/human-pose-estimation.pytorch/data/coco/annotations/'
+person_detection_results_path: '/home/ys/projects/human-pose-estimation.pytorch/data/coco/person_detection_results/COCO_val2017_detections_AP_H_56_person.json'
+
+train:
+    epoch_begin: 0
+    epoch_end: 150
+    lr: 0.01
+    batchsize: 64
+
+test:
+    batchsize: 2
