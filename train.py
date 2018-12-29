@@ -12,7 +12,7 @@ from timeit import default_timer as timer
 
 from src.COCO_Dataset import cocodataset
 from src.loss import MSELoss
-from src.evalute import evalute
+from src.evaluate import evaluate
 from src.models import keypoints_output_net
 
 
@@ -21,6 +21,7 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 console = logging.StreamHandler()
 logging.getLogger('').addHandler(console)
+
 
 def args():
     parser = argparse.ArgumentParser(description='Train keypoints network')
@@ -31,10 +32,10 @@ def args():
     return args
 
 def main():
-
+    
     os.environ["CUDA_VISIBLE_DEVICES"] = "2,3"
 
-    logger.info('available GPU numbers {}'.format(torch.cuda.device_count()))
+    logger.info('\navailable GPU numbers {}'.format(torch.cuda.device_count()))
 
     config_file= args().cfg
     config = edict( yaml.load( open(config_file,'r'))) 
@@ -47,7 +48,7 @@ def main():
     optimizer = torch.optim.Adam(A.parameters(), lr = config.train.lr)
     
     loss = MSELoss()
-
+    
     train_dataset = cocodataset(  config.images_root_dir,
                             config.annotation_root_dir,
                             mode='train',
@@ -79,16 +80,20 @@ def main():
                                         std=[0.229, 0.224, 0.225])
                             ])) 
                             
-    logger.info("\n=+=+=+=+=+=+=+=+=+= training +=+=+=+=+=+=+=+=+=+==")
+    
     
     train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size = config.train.batchsize, shuffle = True , num_workers = 4 , pin_memory=True )
     valid_dataloader = torch.utils.data.DataLoader(valid_dataset, batch_size = config.test.batchsize, shuffle = False , num_workers = 4 , pin_memory=True )
     
+    
     begin, end = config.train.epoch_begin, config.train.epoch_end
+    results = evaluate( A, valid_dataloader , config)
+    best = results[0]
 
+    logger.info("\n=+=+=+=+=+=+=+=+=+= training +=+=+=+=+=+=+=+=+=+==")
     for epoch in range(begin, end):
 
-        for iters, (input, heatmap_gt, kpt_visible, index) in enumerate(train_dataloader):
+        for iters, (input, heatmap_gt, kpt_visible,  index) in enumerate(train_dataloader):
             
             start = timer()
             optimizer.zero_grad()
@@ -103,15 +108,18 @@ def main():
             backward_loss.backward()
             optimizer.step()
             time = timer() - start
+
             if iters % 100 == 0:
-               print(input)
+               
                logger.info('epoch: {}\t iters:[{}|{}]\t loss:{:.4f}\t feed-speed:{:.2f} samples/s'.format(epoch,iters,len(train_dataloader),backward_loss,len(input)/time))
        
-        evalute(A,valid_dataloader)
+        eval_results = evaluate( A, valid_dataloader , config)
+        logger.info('==> mAP : {:3f}'.format(eval_results[0]))
         torch.save(A.state_dict(),'chpt.pt')
-
-
-    
+        if  eval_results[0] > best :
+            best = eval_results[0]
+            logger.info('!(^0^)! Best AP = {}'.format(best))
+            torch.save(A.state_dict(),'best_chpt.pt')
 
 
 if __name__ == '__main__':

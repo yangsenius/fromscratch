@@ -230,7 +230,7 @@ class cocodataset(Dataset):
         data = self.data[id]
         keypoints = data['keypoints'] if 'keypoints' in data else ''
         bbox =      data['bbox']
-        
+        score =     data['score'] if 'score' in data else 1
         index =     data['index']
         file_name = data['file_name']
         image_id =  data['image_id']
@@ -244,14 +244,19 @@ class cocodataset(Dataset):
         input_data[bbox[1]:bbox[1]+bbox[3],bbox[0]:bbox[0]+bbox[2],:] = \
                                     input[bbox[1]:bbox[1]+bbox[3],bbox[0]:bbox[0]+bbox[2],:]
 
-        
-        affine_matrix = self.make_affine_matrix(bbox,self.input_size)
+        if self.mode == 'train':
+            aug_scale = 1
+        else:
+            aug_scale = 1
+
+        affine_matrix = self.make_affine_matrix(bbox,self.input_size,aug_scale=aug_scale)
+        #print(affine_matrix)
     
-        input_data = cv2.warpAffine(input_data,affine_matrix[[0,1],:], self.input_size)
+        input_data = cv2.warpAffine(input_data,affine_matrix[[0,1],:], self.input_size,)
         
         #input_data = input_data.astype(np.float32) 
        
-        
+        #print(input_data)
         if self.transform is not None:
             #  torchvision.transforms.ToTensor() :
             #  (H,W,3) range [0,255] numpy.ndarray  ==> (c,h,w) [0.0,1.0] torch.FloatTensor 
@@ -263,12 +268,13 @@ class cocodataset(Dataset):
 
             heatmap_gt, kpt_visible = self.make_gt_heatmaps(keypoints)
 
-            return input_data , heatmap_gt, kpt_visible, index
+            return input_data , heatmap_gt, kpt_visible,  index, 
         
         if self.mode == 'val' or self.mode =='dt':
             
-            return input_data , image_id ,index , np.linalg.inv(affine_matrix) #inverse
-        
+            return input_data , image_id ,index , score, np.linalg.inv(affine_matrix), np.array(bbox) #inverse
+
+      
         
      
 
@@ -301,7 +307,7 @@ def test():
 
 
 
-    tup = dataset[1]  #112234
+    tup = dataset[132]  #112234
     x = tup[0]
 
     print(x.dtype)
@@ -309,7 +315,7 @@ def test():
         x = np.array(x).transpose(1,2,0)
     print(x.dtype)
     
-    cv2.imwrite('bz.png',x*255)
+    cv2.imwrite('bz.png',x)
 
    
 

@@ -8,9 +8,15 @@ person_detection_results_path: '/home/ys/projects/human-pose-estimation.pytorch/
 
 train:
     epoch_begin: 0
-    epoch_end: 150
+    epoch_end: 100
     lr: 0.01
     batchsize: 64
 
 test:
-    batchsize: 2
+    batchsize: 8
+    confidence_threshold: 0.2
+    oks_nms_threshold: 0.9
+
+
+
+
