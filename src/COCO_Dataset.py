@@ -14,32 +14,6 @@ from torch.utils.data import Dataset
 
 logger = logging.getLogger(__name__)
 
-#coco=COCO(annotation_root_dir+'person_keypoints_train2017.json')
-
-def bbox_rectify(width,height,bbox,keypoints,margin=2):
-        r"""
-        `Author`:  Yang Sen
-
-        `Function`: use bbox_rectify() function to let the bbox cover all visible keypoints
-        
-        `Purpose`: reduce the label noise resulting from some visible (or invisible) keypoints not in bbox
-        """
-        kps = np.array(keypoints).reshape(-1, 3)   #array([[x1,y1,1],[],[x17,y17,1]]]
-        # 针对标注点 ：      kps[kps[:,2]>0] 
-        # 仅针对接可见点的：  kps[kps[:,2]==2] 
-        border = kps[kps[:,2] >=1 ] 
-        if sum(kps[:,2] >=1) > 0:
-            a, b = min(border[:,0].min(),bbox[0]), min(border[:,1].min(), bbox[1])
-            c, d = max(border[:,0].max(),bbox[0]+bbox[2]), max(border[:,1].max(),bbox[1]+bbox[3])
-            assert abs(margin)<20 ,"margin is too large"
-            a,b,c,d=max(0,int(a-margin)),max(0,int(b-margin)),min(width,int(c+margin)),min(height,int(d+margin))
-            ###因为原来bbox只覆盖了人体可见区域，
-            # 有些关键点不可见但标注的是否该按照这样的点扩大，
-            # 会导致噪声特征产生，需要记录一下吧##
-            return [a,b,c-a,d-b]  
-        else:
-        	return bbox
-
 
 class cocodataset(Dataset):
 
@@ -250,13 +224,9 @@ class cocodataset(Dataset):
             aug_scale = 1
 
         affine_matrix = self.make_affine_matrix(bbox,self.input_size,aug_scale=aug_scale)
-        #print(affine_matrix)
     
         input_data = cv2.warpAffine(input_data,affine_matrix[[0,1],:], self.input_size,)
         
-        #input_data = input_data.astype(np.float32) 
-       
-        #print(input_data)
         if self.transform is not None:
             #  torchvision.transforms.ToTensor() :
             #  (H,W,3) range [0,255] numpy.ndarray  ==> (c,h,w) [0.0,1.0] torch.FloatTensor 
@@ -274,15 +244,34 @@ class cocodataset(Dataset):
             
             return input_data , image_id ,index , score, np.linalg.inv(affine_matrix), np.array(bbox) #inverse
 
-      
+def bbox_rectify(width,height,bbox,keypoints,margin=2):
+        """
+        `Function`: use bbox_rectify() function to let the bbox cover all visible keypoints
+        
+        `Purpose`: reduce the label noise resulting from some visible (or invisible) keypoints not in bbox
+        
+        """
+        kps = np.array(keypoints).reshape(-1, 3)   #array([[x1,y1,1],[],[x17,y17,1]]]
+        # for label ：      kps[kps[:,2]>0] 
+        # for visibel label：  kps[kps[:,2]==2] 
+        border = kps[kps[:,2] >=1 ] 
+        if sum(kps[:,2] >=1) > 0:
+            a, b = min(border[:,0].min(),bbox[0]), min(border[:,1].min(), bbox[1])
+            c, d = max(border[:,0].max(),bbox[0]+bbox[2]), max(border[:,1].max(),bbox[1]+bbox[3])
+            assert abs(margin)<20 ,"margin is too large"
+            a,b,c,d=max(0,int(a-margin)),max(0,int(b-margin)),min(width,int(c+margin)),min(height,int(d+margin))
+           
+            return [a,b,c-a,d-b]  
+        else:
+        	return bbox
         
      
 
 def test():  
 
-    dataset_root_dir = '/home/ys/projects/human-pose-estimation.pytorch/data/coco/images/'
-    annotation_root_dir = '/home/ys/projects/human-pose-estimation.pytorch/data/coco/annotations/'
-    person_detection_results_path = '/home/ys/projects/human-pose-estimation.pytorch/data/coco/person_detection_results/COCO_val2017_detections_AP_H_56_person.json'
+    dataset_root_dir = '/your_path/data/coco/images/'
+    annotation_root_dir = '/your_path/data/coco/annotations/'
+    person_detection_results_path = '/your_path/data/coco/person_detection_results/COCO_val2017_detections_AP_H_56_person.json'
     
     torch_transform = torchvision.transforms.Compose([
                             torchvision.transforms.ToTensor(),
@@ -313,9 +302,8 @@ def test():
     print(x.dtype)
     if x.dtype == torch.float32:
         x = np.array(x).transpose(1,2,0)
-    print(x.dtype)
+    print(x)
     
-    cv2.imwrite('bz.png',x)
 
    
 

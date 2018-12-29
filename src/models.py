@@ -256,38 +256,4 @@ def keypoints_output_net(cfg, is_train, num_layers , **kwargs):
     return model
 
 
-class Meta_Weight_Predicting_HyperNetworks(nn.Module):
-    '''
-    
-    Learning to combine two heatmaps to be more accurate by gradient descent 
-
-    Use hypernetworks to predict weight the Conv filter
-
-    Args :
-        feature_channels: 
-        heatmap_channels:
-
-    Input: combine heatmaps: [N,keypoints_channel*model_num,h1,w1]
-           combine features: [N,featuremap_channels*model_num,h2,w2]
-    
-    Output: final_heatmaps :[N,keypoints_channel,h1,w1]
-
-     '''
-
-    def __init__(self,feature_channels,heatmap_channels,):
-        '''
-        
-        '''
-        self.AtrousRate = 6 # enlarge the receptive field to heatmap
-        self.kernel_size = 5 
-        self.padding = self.AtrousRate*(self.kernel_size-1)/2 # keep heatmap size
-
-        ##  heatmaps combine -> heatmap meta weight [17*2,h,w]-> [17,h,w]
-        ## conv1 respresent meta-weiht
-        self.main_conv = nn.Conv2d(heatmap_channels,    17,     kernel_size = self.kernel_size,
-                                                                dilation = self.AtrousRate,
-                                                                padding = self.padding,
-                                                                stride = 1,)
-        
-
         
