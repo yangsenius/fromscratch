@@ -118,7 +118,7 @@ def main():
         torch.save(A.state_dict(),'chpt.pt')
         if  eval_results[0] > best :
             best = eval_results[0]
-            logger.info('!(^0^)! Best AP = {}'.format(best))
+            logger.info('\n!(^ 0 ^)! Best AP = {}\n'.format(best))
             torch.save(A.state_dict(),'best_chpt.pt')
 
 
