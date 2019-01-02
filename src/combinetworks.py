@@ -5,28 +5,17 @@
 import torch
 import torch.nn as nn
 
-class hypernetworks(nn.Module):
-
-    def __init__(self):
-        super().__init__()
-        self.conv = nn.Conv2d(3,3,3)
-        #print([v for k,v in self.conv.state_dict().items()][0])
-        z = torch.ones_like(self.conv.weight)
-        z = z+1
-        self.conv.weight.data = z.clone()
-        print( self.conv.weight.data.size())
-
-    def forward(self,input):
-
-        x = self.conv(input)
-        #print(self.conv.state_dict())
-      
         
-class Meta_Weight_Predicting_HyperNetworks(nn.Module):
+class Combinetworks(nn.Module):
     '''
-    Learning to combine two heatmaps to be more accurate by gradient descent 
+    Learning to combine two low-confidence keypoints heatmaps to be more accurate by gradient descent 
+    Use hypernetworks to predict the weight-parameters of the Convolution filter.
 
-    Use hypernetworks to predict weight of the Convolution filter
+        
+
+    The weight denotes the meta-combination weight of two low-confidence heatmaps, which means
+    two model are uncertain about this keypoint position and two peak positions of heatmaps may be 
+
 
     Args :
         `feature_channels`:   the number of combine_feature_channels
@@ -125,7 +114,7 @@ def test():
 
     heatmap_channels = AB_H_Cat.size()[1]
   
-    Combine_Network = Meta_Weight_Predicting_HyperNetworks(feature_channels, f_h, f_w ,heatmap_channels )
+    Combine_Network = Combinetworks(feature_channels, f_h, f_w ,heatmap_channels )
 
     Meta_heatmap = Combine_Network( AB_F_Cat, AB_H_Cat)
 

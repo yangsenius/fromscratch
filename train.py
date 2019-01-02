@@ -10,21 +10,17 @@ import pprint
 
 import yaml
 from easydict import EasyDict as edict
-import logging 
+import logging
 import argparse
 from timeit import default_timer as timer
+
 
 from src.COCO_Dataset import cocodataset
 from src.loss import MSELoss
 from src.evaluate import evaluate
 from src.models import keypoints_output_net
 
-
-logging.basicConfig(filename='train.log',format = '%(asctime)s - %(name)s: L%(lineno)d - %(levelname)s - %(message)s')
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
-console = logging.StreamHandler()
-logging.getLogger('').addHandler(console)
+import datetime
 
 
 def args():
@@ -35,25 +31,39 @@ def args():
     args = parser.parse_args()
     return args
 
+def logging_set():
+    logging.basicConfig(filename ='train_{}.log'.format(datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')),
+                    format = '%(asctime)s - %(name)s: L%(lineno)d - %(levelname)s - %(message)s')
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    console = logging.StreamHandler()
+    logging.getLogger('').addHandler(console)
+    return logger
+
 def main():
     
+    logger = logging_set()
+    
     os.environ["CUDA_VISIBLE_DEVICES"] = "2,3"
+    torch.backends.cudnn.enabled = True
 
-    logger.info('\navailable GPU numbers {}'.format(torch.cuda.device_count()))
+    logger.info('\n==> available GPU numbers {}'.format(torch.cuda.device_count()))
 
     config_file= args().cfg
-    config = edict( yaml.load( open(config_file,'r'))) 
-    
+    config = edict( yaml.load( open(config_file,'r')))
+    logger.info('-------------------------- configuration ---------------------------')
+    logger.info(pprint.pformat(config))
+    logger.info('---------------------------- ------ ------------------------------')
     A = keypoints_output_net(config, is_train=True , num_layers = 50)
-    
-   
+
+
     A = torch.nn.DataParallel(A).cuda()
-    
+
     optimizer = torch.optim.Adam(A.parameters(), lr = config.train.lr)
-    
+
     loss = MSELoss()
-    
-    train_dataset = cocodataset(  config.images_root_dir,
+
+    train_dataset = cocodataset( config, config.images_root_dir,
                             config.annotation_root_dir,
                             mode='train',
                             transform=torchvision.transforms.Compose([
@@ -62,8 +72,8 @@ def main():
                                         mean=[0.485, 0.456, 0.406],
                                         std=[0.229, 0.224, 0.225])
                             ]))
-                            
-    valid_dataset = cocodataset(config.images_root_dir,
+
+    valid_dataset = cocodataset(config,config.images_root_dir,
                             config.annotation_root_dir,
                             mode='val',
                             transform=torchvision.transforms.Compose([
@@ -73,7 +83,7 @@ def main():
                                         std=[0.229, 0.224, 0.225])
                             ]))
 
-    Val_dt_dataset =cocodataset(config.images_root_dir,
+    Val_dt_dataset =cocodataset(config,config.images_root_dir,
                             config.person_detection_results_path,
                             mode='dt',
                             dataset = 'val',
@@ -82,23 +92,23 @@ def main():
                                 torchvision.transforms.Normalize(
                                         mean=[0.485, 0.456, 0.406],
                                         std=[0.229, 0.224, 0.225])
-                            ])) 
-                            
-    
-    
+                            ]))
+
+
+
     train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size = config.train.batchsize, shuffle = True , num_workers = 4 , pin_memory=True )
     valid_dataloader = torch.utils.data.DataLoader(valid_dataset, batch_size = config.test.batchsize, shuffle = False , num_workers = 4 , pin_memory=True )
-    
-    
+
+
     begin, end = config.train.epoch_begin, config.train.epoch_end
     results = evaluate( A, valid_dataloader , config)
     best = results[0]
 
-    logger.info("\n=+=+=+=+=+=+=+=+=+= training +=+=+=+=+=+=+=+=+=+==")
+    logger.info("\n=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+= training +=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+==")
     for epoch in range(begin, end):
 
         for iters, (input, heatmap_gt, kpt_visible,  index) in enumerate(train_dataloader):
-            
+            logger.info('==>training...')
             start = timer()
             optimizer.zero_grad()
             input = input.cuda()
@@ -114,16 +124,18 @@ def main():
             time = timer() - start
 
             if iters % 100 == 0:
-               
+
                logger.info('epoch: {}\t iters:[{}|{}]\t loss:{:.4f}\t feed-speed:{:.2f} samples/s'.format(epoch,iters,len(train_dataloader),backward_loss,len(input)/time))
-       
+        ## eval ##
         eval_results = evaluate( A, valid_dataloader , config)
-        logger.info('==> mAP : {:3f}'.format(eval_results[0]))
+
+        logger.info('==> mAP is: {:.3f}\n'.format(eval_results[0]))
         torch.save(A.state_dict(),'chpt.pt')
         if  eval_results[0] > best :
             best = eval_results[0]
-            logger.info('\n!(^ 0 ^)! Best AP = {}\n'.format(best))
             torch.save(A.state_dict(),'best_chpt.pt')
+            logger.info('\n!(^ 0 ^)! New Best mAP = {} and all oks metrics is {} \n'.format(best,eval_results))
+            
 
 
 if __name__ == '__main__':

@@ -11,12 +11,13 @@ train:
     epoch_end: 100
     lr: 0.01
     batchsize: 64
+    heatmap_peak_sigma_margin: 2.4
 
 test:
-    batchsize: 8
+    batchsize: 32
+    bbox_score_threshold: 0.0
+
     confidence_threshold: 0.2
     oks_nms_threshold: 0.9
 
-
-
-
+    ckpt: 'best_chpt.pt'
