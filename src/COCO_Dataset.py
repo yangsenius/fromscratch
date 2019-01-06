@@ -21,20 +21,40 @@ logger = logging.getLogger(__name__)
 
 class cocodataset(Dataset):
 
-    def __init__(self, config, images_dir, annotions_path,mode='train', transform = None, dataset = None,*args):
+    def __init__(self, config, images_dir, annotions_path,  mode='train', 
+                                                            transform = None, 
+                                                            dataset = None,
+                                                            augment=False,
+                                                            *args):
         super(cocodataset,self).__init__()
         self.mode = mode
         logger.info("\n+=+=+=+=+= dataset:{} +=+=+=+=+=".format(mode))
         self.score_threshold = config.test.bbox_score_threshold
-        self.input_size =  (288 ,384) # w,h
-        self.heatmap_size = (72, 96)
+
+        self.input_size =  (config.model.input_size.w ,config.model.input_size.h) # w,h
+        self.heatmap_size = (config.model.heatmap_size.w ,config.model.heatmap_size.h)
+
         self.transform = transform
+        self.margin_to_border = config.model.margin_to_border  # input border/bbox border
+
+        ## augmentation setting
+        self.augment = augment
+        if self.augment:
+            logger.info('augmentation is used for training')
+        else:
+            logger.info('augmentation is not used ')
+
+        self.aug_scale = config.train.aug_scale
+        self.aug_rotation = config.train.aug_rotation
+        self.flip = True
 
         if self.mode != 'dt':
+            ## load train or val groundtruth data
             self.images_root = os.path.join(images_dir ,mode +'2017')
 
             self.coco=COCO( os.path.join(annotions_path,'person_keypoints_{}2017.json'.format(mode)))   # train or val
             self.index_to_image_id = self.coco.getImgIds()
+            
             self.data = self.get_gt_db()
             cats = [cat['name']
                     for cat in self.coco.loadCats(self.coco.getCatIds())]
@@ -42,18 +62,18 @@ class cocodataset(Dataset):
             logger.info("==> classes:{}".format(self.classes))
             logger.info("dataset:{} , total images:{}".format(mode,len(self.index_to_image_id)))
 
-            self.sigma_margin = config.train.heatmap_peak_sigma_margin
+            self.sigma_factor = config.train.heatmap_peak_sigma_factor
              # From COCO statistics to determine the sigma for each keypoint's heatmap gaussian
-            self.sigmas = self.sigma_margin *np.array([.26, .25, .25, .35, .35, .79, \
-                                    .79, .72, .72, .62,.62, 1.07, 1.07, .87, .87, .89, .89])                                                                                      
+            self.sigmas = self.sigma_factor *np.array([1.0,1.0, 1.0, 1.0, 1.0, 1.1, \
+                                    1.1, 1.0, 1.0, 1.0,1.0, 1.2, 1.2, 1.0, 1.0, 1.0, 1.0])                                                                                      
             logger.info('@ Standard deviation of gaussian kernel for \
             different keypoints heatmaps is:\n==> {} '.format(self.sigmas))
 
         if self.mode == 'dt':
+            ## load detection results
             self.images_root = os.path.join(images_dir,dataset +'2017')
             self.annotations = json.load( open(annotions_path,'r')) # dt.json
             self.data = self.get_dt_db()
-
 
         logger.info("dataset:{} , total samples: {}".format(mode,len(self.data)))
         
@@ -63,6 +83,7 @@ class cocodataset(Dataset):
         return image_path
 
     def get_dt_db(self,):
+        "get detection results"
 
         score_threshold = self.score_threshold
         container = []
@@ -93,9 +114,11 @@ class cocodataset(Dataset):
 
 
     def get_gt_db(self,):
+        "get groundtruth database"
 
         container = []
         index = 0
+       
         for image_id in self.index_to_image_id:
 
             img_info = self.coco.loadImgs(image_id)[0]
@@ -127,11 +150,12 @@ class cocodataset(Dataset):
 
                 index = index + 1
                 bbox_index = bbox_index + 1
-
+        
         return container
 
-    def make_affine_matrix(self, bbox, target_size, margin=1.25, aug_rotation= 0, aug_scale=1):
+    def make_affine_matrix(self, bbox, target_size, margin=1, aug_rotation= 0, aug_scale=1):
         "transform bbox ROI to adapat the net-input size"
+
         (w,h)=target_size
         scale = min((w/margin) /bbox[2],
                     (h/margin) /bbox[3])
@@ -170,12 +194,14 @@ class cocodataset(Dataset):
         for id,points in enumerate(keypoints):
             if points[2]==0:
                 continue
+            vis = points[2] # python value bug
             points[2] = 1
             keypoints[id][0:2] = np.dot(affine_matrix, points)[0:2]
-            if keypoints[id][0]<=0 or (keypoints[id][0]+1)>=self.input_size[0]:
+            keypoints[id][2] = vis 
+
+            if keypoints[id][0]<=0 or (keypoints[id][0]+1)>=self.input_size[0] or \
+                    keypoints[id][1]<=0 or (keypoints[id][1]+1)>=self.input_size[1]:
                 keypoints[id][0]=0
-                keypoints[id][2]=0
-            if keypoints[id][1]<=0 or (keypoints[id][1]+1)>=self.input_size[1]:
                 keypoints[id][1]=0
                 keypoints[id][2]=0
 
@@ -197,13 +223,72 @@ class cocodataset(Dataset):
                 gt_x = min(int((kpt[0]+0.5)/downsample), self.heatmap_size[0]-1)
                 gt_y = min(int((kpt[1]+0.5)/downsample), self.heatmap_size[1]-1)
 
-                sigma_loose = (2/kpt_visible[id])  # loose punishment for invisible label keypoints: sigma *2
-                heatmap_gt[id][gt_y,gt_x] = 1
-                heatmap_gt[id,:,:] = gaussian(heatmap_gt[id,:,:],sigma=self.sigmas[id]*sigma_loose)
+                #sigma_loose = (2/kpt_visible[id])  # loose punishment for invisible label keypoints: sigma *2
+                heatmap_gt[id,gt_y,gt_x] = 1
+                heatmap_gt[id,:,:] = gaussian(heatmap_gt[id,:,:],sigma=self.sigmas[id])#*sigma_loose)
                 amx = np.amax(heatmap_gt[id])
                 heatmap_gt[id] /= amx  # make the max value of heatmap equals 1
+                loose = 2/kpt_visible[id] # loose = 2: loose punishment for invisible label keypoints
+                heatmap_gt[id] /= loose 
 
         return heatmap_gt, kpt_visible
+
+    def multi_joints_peak_heatmap(self,keypoints):
+        '''
+        We add a extra heatmap called `multi_joints_peak_heatmap` which 
+        generates all keypoints gaussian peaks in a single heatmap
+        we want use this heatmap layer to distinguish a person area mask.
+        We design this heatmap because we don't want to acquire more supervised information 
+        about human border mask.
+        Instead we want to utilize the keypoints position to generate probability information 
+        about the mask and it can be think as a prior information of human body
+
+        if the keypoint is visible, we make the corresponding gaussian peak value bigger
+        if the keypoint is invisible, we make the corresponding gaussian peak value smaller
+        The sigma of the gaussian peak distribution of keypoint is set according to 
+        Coco dataset statistic data like:
+
+        `sigmas` = 
+        `[.26, .25, .25, .35, .35,.79, .79, .72, .72, .62,.62, 1.07, 1.07, .87, .87, .89, .89]`
+        
+        In order to a obivous area of human mask, we should make gaussian kernel size big to 
+        cover more region,we multiply the `sigmas` with a `factor` value
+    
+        '''
+
+        sigmas =np.array([.26, .25, .25, .35, .35,.79, .79, .72, .72, .62,
+        .62, 1.07, 1.07, .87, .87, .89, .89])
+        factor_value = 6
+        sigmas = factor_value* sigmas
+
+        #multi_peak_heatmap =np.zeros((self.heatmap_size[1],self.heatmap_size[0]),dtype=np.float32)
+        
+        heatmap_gt = np.zeros((len(keypoints),self.heatmap_size[1],self.heatmap_size[0]),dtype=np.float32)
+        kpt_visible = np.array(keypoints[:,2])
+
+        downsample = self.input_size[1] / self.heatmap_size[1]
+
+        for id,kpt in enumerate(keypoints):
+            if kpt_visible[id]==0:
+                continue
+            if kpt_visible[id]==1 or kpt_visible[id]==2:  # 1: label but invisible 2: label visible
+
+                gt_x = min(int((kpt[0]+0.5)/downsample), self.heatmap_size[0]-1)
+                gt_y = min(int((kpt[1]+0.5)/downsample), self.heatmap_size[1]-1)
+
+                #sigma_loose = (2/kpt_visible[id])  # loose punishment for invisible label keypoints: sigma *2
+                heatmap_gt[id,gt_y,gt_x] = 1
+                heatmap_gt[id,:,:] = gaussian(heatmap_gt[id,:,:],sigma=sigmas[id])#*sigma_loose)
+                amx = np.amax(heatmap_gt[id])
+                heatmap_gt[id] /= amx  # make the max value of heatmap equals 1
+                loose = (2/kpt_visible[id]) # loose = 2: loose punishment for invisible label keypoints
+                heatmap_gt[id] /= loose 
+
+        #multi_peak_heatmap = heatmap_gt.sum(axis=0)
+        multi_peak_heatmap = np.amax(heatmap_gt, axis = 0, keepdims = True)
+
+        return multi_peak_heatmap
+
 
     def __len__(self,):
 
@@ -221,19 +306,26 @@ class cocodataset(Dataset):
 
         image_path = self.get_image_path(file_name)
         #(h,w,3)
-        input = cv2.imread( image_path )
+        input_data = cv2.imread( image_path )
 
+        #input_data = np.zeros_like(input,dtype=np.uint8)
+        #input_data[bbox[1]:bbox[1]+bbox[3],bbox[0]:bbox[0]+bbox[2],:] = \
+                                    #input[bbox[1]:bbox[1]+bbox[3],bbox[0]:bbox[0]+bbox[2],:]
 
-        input_data = np.zeros_like(input,dtype=np.uint8)
-        input_data[bbox[1]:bbox[1]+bbox[3],bbox[0]:bbox[0]+bbox[2],:] = \
-                                    input[bbox[1]:bbox[1]+bbox[3],bbox[0]:bbox[0]+bbox[2],:]
+        if self.mode == 'train' and self.augment == True:
+            s = self.aug_scale # 0.3
+            r = self.aug_rotation #30^.
+            aug_scale = np.clip(np.random.randn()*s + 1, 1 - s, 1 + s)
+            aug_rotation = np.clip(np.random.randn()*r, -r, r) 
 
-        if self.mode == 'train':
-            aug_scale = 1
         else:
             aug_scale = 1
+            aug_rotation = 0
 
-        affine_matrix = self.make_affine_matrix(bbox,self.input_size,aug_scale=aug_scale)
+        affine_matrix = self.make_affine_matrix(bbox,self.input_size,
+                                                margin = self.margin_to_border,
+                                                aug_scale=aug_scale,
+                                                aug_rotation=aug_rotation)
 
         input_data = cv2.warpAffine(input_data,affine_matrix[[0,1],:], self.input_size,)
 
@@ -246,20 +338,36 @@ class cocodataset(Dataset):
 
             keypoints = self.kpt_affine(keypoints,affine_matrix)
 
-            heatmap_gt, kpt_visible = self.make_gt_heatmaps(keypoints)
+            ## flip with 0.5 probability
+            if self.augment and self.flip and np.random.random() <= 0.5 and self.transform is not None:
+                input_data = torch.flip(input_data,2)
+                keypoints[:,0] = self.input_size[0] - 1 - keypoints[:,0] 
 
-            return input_data , heatmap_gt, kpt_visible,  index,
+            heatmap_gt, kpt_visible = self.make_gt_heatmaps(keypoints)
+            prior_mask = self.multi_joints_peak_heatmap(keypoints)
+
+            info = {
+                'index':index,
+                'prior_mask':prior_mask
+            }
+
+            return input_data , heatmap_gt, kpt_visible, info 
 
         if self.mode == 'val' or self.mode =='dt':
 
-            return input_data , image_id ,index , score, np.linalg.inv(affine_matrix), np.array(bbox) #inverse
+            keypoints = self.kpt_affine(keypoints,affine_matrix)
+            prior_mask = self.multi_joints_peak_heatmap(keypoints)
+            info = {
+                'index':index,
+                'prior_mask':prior_mask
+            }
 
-def bbox_rectify(width,height,bbox,keypoints,margin=2):
+            return input_data , image_id  , score, np.linalg.inv(affine_matrix), np.array(bbox), info #inverse
+
+def bbox_rectify(width,height,bbox,keypoints,margin=5):
         """
-        `Function`: use bbox_rectify() function to let the bbox cover all visible keypoints
-
-        `Purpose`: reduce the label noise resulting from some visible (or invisible) keypoints not in bbox
-
+        use bbox_rectify() function to let the bbox cover all visible keypoints
+        to reduce the label noise resulting from some visible (or invisible) keypoints not in bbox
         """
         kps = np.array(keypoints).reshape(-1, 3)   #array([[x1,y1,1],[],[x17,y17,1]]]
         # for label ：      kps[kps[:,2]>0]
@@ -279,9 +387,13 @@ def bbox_rectify(width,height,bbox,keypoints,margin=2):
 
 def test():
 
-    dataset_root_dir = '/your_path/data/coco/images/'
-    annotation_root_dir = '/your_path/data/coco/annotations/'
-    person_detection_results_path = '/your_path/data/coco/person_detection_results/COCO_val2017_detections_AP_H_56_person.json'
+    import yaml
+    from easydict import EasyDict as edict
+    config = edict( yaml.load( open('../config.yaml','r')))
+
+    dataset_root_dir = '../../data/coco/images/'
+    annotation_root_dir = '../../data/coco/annotations/'
+    person_detection_results_path = '../../data/coco/person_detection_results/COCO_val2017_detections_AP_H_56_person.json'
 
     torch_transform = torchvision.transforms.Compose([
                             torchvision.transforms.ToTensor(),
@@ -296,7 +408,8 @@ def test():
                             mode = 'dt',
                             dataset = 'val',
                             transform = torch_transform)'''
-    dataset = cocodataset(  dataset_root_dir,
+    dataset = cocodataset(  config,
+                            dataset_root_dir,
                             annotation_root_dir,
                             mode = 'train',
                             #dataset = 'val',
@@ -306,9 +419,9 @@ def test():
 
 
 
-    tup = dataset[132]  #112234
+    tup = dataset[34]  #112234
     x = tup[0]
-
+    print(tup[2])
     print(x.dtype)
     if x.dtype == torch.float32:
         x = np.array(x).transpose(1,2,0)

@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 ##################### evaluate #####################3
 
-def evaluate( model , dataset , config):
+def evaluate( model , dataset , config, output_dir):
 
     logger.info("\n=+=+=+=+=+=+=+=+=+=+=+= evalute +==+=+=+=+=+=+=+=+=+=+=+=+=+=+=\n")
     model.eval()
@@ -30,18 +30,24 @@ def evaluate( model , dataset , config):
     #####   output results in val-or-test dataset  #########
     with torch.no_grad():
 
-        for id ,(input,image_id ,index,score ,affine_matrix_inv, bbox) in enumerate(dataset):
+        for id ,(input,image_id ,score ,affine_matrix_inv, bbox, info) in enumerate(dataset):
 
             start = timer()
             heatmap_dt, _ = model(input)
 
+            #####
+
             heatmap_dt = heatmap_dt.cpu()
             coordinate_argmax, maxval =  get_final_coord( heatmap_dt, post_processing = True)
 
-            pred_kpt = compute_orignal_coordinate(affine_matrix=affine_matrix_inv, heatmap_coord=coordinate_argmax)
+            pred_kpt = compute_orignal_coordinate(affine_matrix=affine_matrix_inv, 
+                                                    heatmap_coord=coordinate_argmax,
+                                                    bounding = bbox)
 
             pred_kpt[:,:,2] = maxval[:,:]
             pred_kpt = pred_kpt.numpy().round(3).reshape(len(pred_kpt),-1)
+            
+            index = info['index']
 
             for i in range(len(input)):
 
@@ -90,6 +96,13 @@ def evaluate( model , dataset , config):
         kpts = oks_nms(kpts, config.test.oks_nms_threshold)
         #kpts = oks_nms_sb(kpts, config.test.oks_nms_threshold)
 
+        #if all(a['score']<= 0.2 for a in kpts):
+        #    continue  #skip peroson bbox with low-score!
+
+        #score_list = [a['score'] for a in kpts]
+        #if sum(score_list)/(len(score_list)+1e-8) <=0.10:
+        #    continue
+
         for sample in kpts:
 
             image_id = sample['image_id']
@@ -101,12 +114,12 @@ def evaluate( model , dataset , config):
 
     logger.info('\n==>  the number of predict_results samples is {} after OKS NMS , consuming time = {:.3f} \n'.format(len(dt_list),timer()-begin))
 
-    eval_reults = coco_eval(config,dt_list)
+    eval_reults = coco_eval(config,dt_list,output_dir)
 
     return eval_reults
 
 
-def coco_eval(config, dt):
+def coco_eval(config, dt, output_dir):
     """
     Evaluate the result with COCO API
     """
@@ -114,18 +127,20 @@ def coco_eval(config, dt):
     gt_path = os.path.join( config.annotation_root_dir,'person_keypoints_val2017.json')
 
     
-    dt_path = 'eval_results/dt.json'
+    dt_path = os.path.join(output_dir,'dt.json')
+
 
     with open(dt_path, 'w') as f:
         json.dump(dt, f)
         
-    logger.info('==>dt.json has been written in eval_results/dt.json')
+    logger.info('==>dt.json has been written in '+ os.path.join(output_dir,'dt.json'))
 
     coco = COCO(gt_path)
 
     coco_dets = coco.loadRes(dt_path)
     coco_eval = COCOeval(coco, coco_dets, "keypoints")
-
+   
+    #coco_eval.params.imgIds  =  image_ids
     coco_eval.evaluate()
     coco_eval.accumulate()
     coco_eval.summarize()
@@ -184,18 +199,22 @@ def get_final_coord(batch_heatmaps,post_processing = True):
 
     return preds, maxvals
 
-def compute_orignal_coordinate(affine_matrix, heatmap_coord, up = 4):
+def compute_orignal_coordinate(affine_matrix, heatmap_coord, up = 4, bounding= None):
     '''
     A = [j,n,m]  B = [j,m,p]
     [j,n,p]= [j,n,m] * [j,m,p]
 
     C = torch.matmul(A,B) = [j,n,p]
 
-    A : affine_matrix :[N,3,3]
-    B : orig_coord:    [N,17,3] -> [N,3,17]
-    C : affine_coord:      [N,3,3]*[N,3,17] = [N,3,17]  =>[N,17,3]
+    A : `affine_matrix` :[N,3,3]
+    B : `orig_coord`:    [N,17,3] -> [N,3,17]
+    C : `affine_coord`:      [N,3,3]*[N,3,17] = [N,3,17]  =>[N,17,3]
 
     return C
+
+    Note: `bounding` is prevent the final coordinates falling outside the image border
+
+    `bounding` = [left_x,up_y, w, h] like `bbox`
 
     '''
 
@@ -212,6 +231,14 @@ def compute_orignal_coordinate(affine_matrix, heatmap_coord, up = 4):
     affine_coord = torch.matmul(affine_matrix.float(), orig_coord.float())
 
     affine_coord = affine_coord.permute(0,2,1)
+    
+    if bounding is not None:
+        # restrict the keypoints falling into bbox
+        for i in range(len(affine_coord)):
+            affine_coord_x = affine_coord[i,:,0].clamp(bounding[i,0],bounding[i,0]+bounding[i,2])
+            affine_coord_y = affine_coord[i,:,1].clamp(bounding[i,1],bounding[i,1]+bounding[i,3])
+            affine_coord[i,:,0] = affine_coord_x
+            affine_coord[i,:,1] = affine_coord_y
 
     return affine_coord
 

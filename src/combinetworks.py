@@ -42,7 +42,7 @@ class Combinetworks(nn.Module):
     def __init__(self, feature_channels, feature_h, feature_w, heatmap_channels, activation='relu'):
         super().__init__()
       
-        self.AtrousRate = 6 # enlarge the receptive field to heatmap
+        self.AtrousRate = 6 # enlarge the receptive field to cover heatmap gaussian kernel
         self.kernel_size = 5 
         self.padding = int(self.AtrousRate*(self.kernel_size-1)/2) # keep heatmap size
         
@@ -72,8 +72,8 @@ class Combinetworks(nn.Module):
 
         ###################  hypernetworks two-layers linear network  ###########       
         self.hypernetworks = nn.Sequential(
-            nn.Linear(   512*feature_h*feature_w,  1024,   bias=True),
-            nn.Linear(   1024,  conv_filter_param_num ,bias=True)
+            nn.Linear(   512*feature_h*feature_w,  2048,   bias=True),
+            nn.Linear(   2048,  conv_filter_param_num ,bias=True)
              )
         ################################################################
 

@@ -21,6 +21,7 @@ class MSELoss(torch.nn.Module):
 #trace_MSEloss = torch.jit.trace(MSELoss,(torch.randn(2,2,2,2),torch.randn(2,2,2,2),torch.ones(2)))
 
 
+
 def test():
 
     preds = torch.randn(3,7,96,72)

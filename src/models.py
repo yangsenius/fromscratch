@@ -100,7 +100,7 @@ class Bottleneck(nn.Module):
 
 class PoseResNet(nn.Module):
 
-    def __init__(self, block, layers, cfg, **kwargs):
+    def __init__(self, block, layers, cfg, heatmap_channels = 17,**kwargs):
         self.inplanes = 64
        # extra = cfg.MODEL.EXTRA
         self.deconv_with_bias = False
@@ -125,7 +125,7 @@ class PoseResNet(nn.Module):
 
         self.final_layer = nn.Conv2d(
             in_channels= 256,
-            out_channels = 17,
+            out_channels = heatmap_channels,
             kernel_size= 1,
             stride=1,
             padding =0  #if extra.FINAL_CONV_KERNEL == 3 else 0

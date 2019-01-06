@@ -1,6 +1,13 @@
 model:
     init_weights: True
     pretrained_path: ''
+    input_size: 
+        w: 288
+        h: 384
+    heatmap_size:
+        w: 72
+        h: 96
+    margin_to_border: 1.12 # >=1
 
 images_root_dir: '../data/coco/images/'
 annotation_root_dir: '../data/coco/annotations/'
@@ -11,13 +18,15 @@ train:
     epoch_end: 100
     lr: 0.01
     batchsize: 64
-    heatmap_peak_sigma_margin: 2.4
-
+    heatmap_peak_sigma_factor: 4
+    aug_scale: 0.3
+    aug_rotation: 30 
+    
 test:
     batchsize: 32
     bbox_score_threshold: 0.0
 
     confidence_threshold: 0.2
-    oks_nms_threshold: 0.9
+    oks_nms_threshold: 0.95
 
-    ckpt: 'best_chpt.pt'
+    ckpt: 'ckpt/pose_resnet_50_384x288.pth.tar'
