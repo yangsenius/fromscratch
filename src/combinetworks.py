@@ -4,10 +4,12 @@
 
 import torch
 import torch.nn as nn
+from torch.nn.parameter import Parameter
 
-        
-class Combinetworks(nn.Module):
+class Combinetworks_v_0_1(nn.Module):
     '''
+    v 0.1
+
     Learning to combine two low-confidence keypoints heatmaps to be more accurate by gradient descent 
     Use hypernetworks to predict the weight-parameters of the Convolution filter.
 
@@ -91,14 +93,15 @@ class Combinetworks(nn.Module):
        
 
         Conv_Kernel_parameters  = predict_weights.view(weight_shape).clone()
-
+        print('shape',Conv_Kernel_parameters.size())
         meta_heatmap = nn.functional.conv2d(heatmaps, Conv_Kernel_parameters,   dilation = self.AtrousRate,
                                                                                 padding = self.padding,
                                                                                 stride = 1,
                                                                                 bias=None)
         return meta_heatmap
-        
-def test():
+
+
+def test_v_0_1():
         
     f_A, f_B = torch.randn(3,512,12,9),torch.randn(3,512,12,9)
     h_A, h_B = torch.randn(3,17,96,72),torch.randn(3,17,96,72)
@@ -114,7 +117,7 @@ def test():
 
     heatmap_channels = AB_H_Cat.size()[1]
   
-    Combine_Network = Combinetworks(feature_channels, f_h, f_w ,heatmap_channels )
+    Combine_Network = Combinetworks_v_0_1(feature_channels, f_h, f_w ,heatmap_channels )
 
     Meta_heatmap = Combine_Network( AB_F_Cat, AB_H_Cat)
 
@@ -129,5 +132,102 @@ def test():
     print(Combine_Network.hypernetworks[0].weight.grad.size())
     print(Combine_Network.combination_conv.weight.grad)
 
+##3######################## v ###################
+
+class combinetworks_v_0_2(nn.Module):
+    '1x1 conv'
+    def __init__(self,combine_channels, heatmap_channels ):
+        super(combinetworks_v_0_2,self).__init__()
+        
+        # 1x1 conv_kernel_size to refine the keypoints heatmaps
+        self.conv = torch.nn.Conv2d(combine_channels, heatmap_channels, kernel_size = 1, stride=1, padding= 0)
+
+    
+    def forward(self, prior_mask, keypints_heatmap):
+
+        
+        combine = torch.cat([prior_mask,keypints_heatmap],dim=1)
+        refine_heatmaps = self.conv(combine)
+        
+        return refine_heatmaps
+
+
+
+class combinetworks_v_1(nn.Module):
+    r"""
+    In this structure, we design a `combinetworks` ,its' parameters include:
+
+    like 1x1 convolution fiter:
+        `conv_weight : [k+1,k,1,1]`
+        `conv_bias : [k,1,1]`
+
+    For a given mask heatmap [1,h,w] and kpt_heatmaps [17,h,w] ,
+    it just implements elementwise linear operation on different channels, 
+    which produces a element-wise map for each keypoint heatmap
+    
+    In another word, We use this combinetworks to predict a meta-weight `\alpha` and `\beta` ,
+    which means combination between mask_heatmap and kpts_heatmap: (we default the `\beta` as `1`)
+
+    So, for each of keypoint heatmap[i] :
+        meta_keypoint heatmap[i] = `\alpha[i]` * `mask_heatmap` + `\beta` * `keypoint heatmap[i]`
+    
+
+    Input: `Mask_heatmap :[N,1,H,W]`
+           `kpts_heatmap :[N,k,H,W]`
+    
+    Output: `Meta_weight :[N,k,H,W]`
+            `Meta_heatmap:[N,k,H,W]`
+
+
+    where : `combine_heatmap` = torch.cat([`Mask_heatmap`,`kpts_heatmap`],dim = 1) = `[N,k+1,H,W]`
+
+            `Meta_weight` = torch.matmul(`combine_heatmap`,`conv_weight`) + `conv_bias`
+
+            `Meta_heatmap[:,i,:,:]` = `Mask_heatmap[:,1,:,:]` * `Meta_weight[:,i,:,:]` + `kpts_heatmap[:,i,:,:]`
+
+    
+    In addition, we can also combine the `image feature` to predict the `Meta_weight`
+
+    Our combinet try to learn the relationship between huamn mask shape and 
+    
+    skeleton keypoints ,also can learn the Constraint relationship between keypoints
+
+
+    """
+
+    def __init__(self, combine_channels, heatmap_channels):
+        super(combinetworks_v_1,self).__init__()
+
+        conv_w = torch.empty(heatmap_channels, combine_channels, 1, 1)
+        conv_b = torch.empty(heatmap_channels)
+        nn.init.uniform_(conv_w, a=0,b=1)
+        nn.init.uniform_(conv_b, a=0,b=1)
+
+        self.combination_conv_w = Parameter(conv_w)
+        self.combination_conv_b = Parameter(conv_b)
+
+    def forward(self, kpts_heatmaps , mask_heatmap):
+        
+        combine_heatmaps = torch.cat([mask_heatmap,kpts_heatmaps],dim=1)
+        #                                   [N,K+1,H,W]         [K,K+1,1,1]             [K,1,1]
+        meta_weight = nn.functional.conv2d(combine_heatmaps, self.combination_conv_w, bias = self.combination_conv_b)
+
+        alpha = meta_weight
+        beta = 1
+        
+        meta_heatmaps = mask_heatmap * alpha + kpts_heatmaps * beta
+
+        return meta_heatmaps
+
+def test_v1():
+
+    mask = torch.randn(3,1,12,8)
+    kpts = torch.randn(3,17,12,8)
+
+    combine_net = combinetworks_v_1(18,17)
+
+    meta_kpt = combine_net(kpts,mask)
+    print(meta_kpt.size())
+
 if __name__ == '__main__':
-    test()
+    test_v1()
