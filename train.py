@@ -63,13 +63,14 @@ def main():
     A = keypoints_output_net(config, is_train=True , num_layers = 50)
     A = torch.nn.DataParallel(A).cuda()
     logger.info(">>> total params of Model: {:.2f}M".format(sum(p.numel() for p in A.parameters()) / 1000000.0))
-    optimizer = torch.optim.Adam(A.parameters(), lr = config.train.lr)
+    
 
     loss = MSELoss()
 
     train_dataset = cocodataset( config, config.images_root_dir,
                             config.annotation_root_dir,
                             mode='train',
+                            augment = config.train.augmentation,
                             transform=torchvision.transforms.Compose([
                                 torchvision.transforms.ToTensor(),
                                 torchvision.transforms.Normalize(
@@ -80,6 +81,7 @@ def main():
     valid_dataset = cocodataset(config,config.images_root_dir,
                             config.annotation_root_dir,
                             mode='val',
+                    
                             transform=torchvision.transforms.Compose([
                                 torchvision.transforms.ToTensor(),
                                 torchvision.transforms.Normalize(
@@ -93,11 +95,15 @@ def main():
 
 
     begin, end = config.train.epoch_begin, config.train.epoch_end
-    
+
+    optimizer = torch.optim.Adam(A.parameters(), lr = config.train.lr)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.95)
     best = 0
     logger.info("\n=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+= training +=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+==")
     for epoch in range(begin, end):
         logger.info('==>training...')
+        scheduler.step()
+        
         for iters, (input, heatmap_gt, kpt_visible,  info) in enumerate(train_dataloader):
             
             start = timer()

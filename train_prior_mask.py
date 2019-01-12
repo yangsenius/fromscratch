@@ -70,6 +70,7 @@ def main():
     train_dataset = cocodataset( config, config.images_root_dir,
                             config.annotation_root_dir,
                             mode='train',
+                            augment = True,
                             transform=torchvision.transforms.Compose([
                                 torchvision.transforms.ToTensor(),
                                 torchvision.transforms.Normalize(
@@ -88,15 +89,14 @@ def main():
                             ]))
 
     train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size = config.train.batchsize, shuffle = True , num_workers = 4 , pin_memory=True )
-    valid_dataloader = torch.utils.data.DataLoader(valid_dataset, batch_size = config.test.batchsize, shuffle = False , num_workers = 4 , pin_memory=True )
+    valid_dataloader = torch.utils.data.DataLoader(valid_dataset, batch_size = 8, shuffle = False , num_workers = 4 , pin_memory=True )
 
     begin, end = config.train.epoch_begin, config.train.epoch_end
     
-
     logger.info("\n=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+= training +=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+==")
     for epoch in range(begin, end):
         logger.info('==>training...')
-        for iters, (input, _ , _ ,  info) in enumerate(train_dataloader):
+        for iters, (input, _,_, info) in enumerate(train_dataloader):
             
             start = timer()
             optimizer.zero_grad()
@@ -121,24 +121,38 @@ def main():
 
                logger.info('epoch: {}\t iters:[{}|{}]\t loss:{:.4f}\t feed-speed:{:.2f} samples/s'.format(epoch,iters,len(train_dataloader),backward_loss,len(input)/time))
         
-        for id, (input,_ ,_ ,_, _, info) in enumerate(valid_dataloader):
-            start = timer()
-            mask_gt = info['prior_mask']
-            mask_gt = mask_gt.cuda()
-            input = input.cuda()
-            Prior= Prior.eval()
-            mask_dt, _ = Prior(input)
+        logger.info('+++====++++=== evalute ===+++===+++')
 
-            average_loss =  ((mask_dt- mask_gt)**2).sum(dim=3).sum(dim=2).sum(dim=1).mean(dim=0)
+        best_loss = 99999
+        loss = 0
+        t = 1
+        with torch.no_grad():
+            for id, (input, _ ,_ ,_, _, info) in enumerate(valid_dataloader):
+                start = timer()
+                mask_gt = info['prior_mask']
+                mask_gt = mask_gt.cuda()
+                input = input.cuda()
+                Prior= Prior.eval()
+                mask_dt, _ = Prior(input)
 
-            if id % 50 == 0:
-    
-               logger.info('epoch: {}\t iters:[{}|{}]\t valid_loss:{:.4f}\t inference-speed:{:.2f} samples/s'.format(epoch,id,len(valid_dataloader),average_loss,len(input)/time))
-        
+                mask_loss =  ((mask_dt- mask_gt)**2).sum(dim=3).sum(dim=2).sum(dim=1).mean(dim=0)
+                time = timer() - start
+                loss = loss + mask_loss
+                t += 1
+                average_loss = loss/t
 
+                if id % 50 == 0:
+                    
+                    logger.info('epoch: {}\t iters:[{}|{}]\t valid_loss:{:.4f}\t inference-speed:{:.2f} samples/s'
+                    .format(epoch, id, len(valid_dataloader), average_loss , len(input)/time))
 
-        torch.save(Prior.state_dict(),os.path.join(output_dir,'ckpt.tar'))
+        torch.save(Prior.state_dict(),os.path.join(output_dir,'prior_mask_ckpt.tar'))
         logger.info('keypoints Prior model is saved')
+
+        if average_loss < best_loss:
+            torch.save(Prior.state_dict(),os.path.join(output_dir,'prior_mask_best_ckpt.tar'))
+            logger.info('!(@ ^ @)! new best loss {}'.format(average_loss))
+            best_loss = average_loss
 
 if __name__ == '__main__':
     main()

@@ -1,9 +1,3 @@
-# ------------------------------------------------------------------------------
-# Copyright (c) Microsoft
-# Licensed under the MIT License.
-# Written by Bin Xiao (Bin.Xiao@microsoft.com)
-# ------------------------------------------------------------------------------
-
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -100,7 +94,7 @@ class Bottleneck(nn.Module):
 
 class PoseResNet(nn.Module):
 
-    def __init__(self, block, layers, cfg, heatmap_channels = 17,**kwargs):
+    def __init__(self, block, layers, out_channels, cfg, **kwargs):
         self.inplanes = 64
        # extra = cfg.MODEL.EXTRA
         self.deconv_with_bias = False
@@ -115,17 +109,19 @@ class PoseResNet(nn.Module):
         self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
         self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
-
+        layer_num = 3
+        deconv_channels = [256,256,256]
+        deconv_kernel_size = [4,4,4]
 
         # used for deconv layers
         self.deconv_layers = self._make_deconv_layer(
-            3,               # layers
-            [256,256,256],   # channels
-            [4,4,4]  )       # kernel_size
+            layer_num,               # layers
+            deconv_channels,   # channels
+            deconv_kernel_size  )       # kernel_size
 
         self.final_layer = nn.Conv2d(
             in_channels= 256,
-            out_channels = heatmap_channels,
+            out_channels = out_channels,
             kernel_size= 1,
             stride=1,
             padding =0  #if extra.FINAL_CONV_KERNEL == 3 else 0
@@ -149,6 +145,10 @@ class PoseResNet(nn.Module):
         return nn.Sequential(*layers)
 
     def _get_deconv_cfg(self, deconv_kernel, index):
+        '''
+        Reference: A Simple baseline for human pose estimation
+        Written by Bin Xiao (Bin.Xiao@microsoft.com)
+        '''
         if deconv_kernel == 4:
             padding = 1
             output_padding = 0
@@ -162,6 +162,10 @@ class PoseResNet(nn.Module):
         return deconv_kernel, padding, output_padding
 
     def _make_deconv_layer(self, num_layers, num_filters, num_kernels):
+        '''
+        Reference: A Simple baseline for human pose estimation
+        Written by Bin Xiao (Bin.Xiao@microsoft.com)
+        '''
         assert num_layers == len(num_filters), \
             'ERROR: num_deconv_layers is different len(num_deconv_filters)'
         assert num_layers == len(num_kernels), \
@@ -243,12 +247,25 @@ resnet_spec = {18: (BasicBlock, [2, 2, 2, 2]),
                152: (Bottleneck, [3, 8, 36, 3])}
 
 
-def keypoints_output_net(cfg, is_train, num_layers , **kwargs):
+def keypoints_output_net(cfg, is_train, num_layers , output_channels = None,  **kwargs):
     
 
     block_class, layers = resnet_spec[num_layers]
+    
+    # whether use multi-task for keypoints and human body mask or not
+    if cfg.model.extra_mask_flag:
 
-    model = PoseResNet(block_class, layers, cfg, **kwargs)
+        out_channels = cfg.model.keypoints_num + cfg.model.extra_mask_channels
+
+    else:
+        
+        out_channels = cfg.model.keypoints_num
+    
+    if output_channels is not None:
+        
+        out_channels = output_channels
+
+    model = PoseResNet(block_class, layers, out_channels, cfg, **kwargs)
 
     if is_train and cfg.model.init_weights:
         model.init_weights(pretrained=cfg.model.pretrained_path)

@@ -12,6 +12,7 @@ import logging
 import json
 
 from pycocotools.coco import COCO
+from pycocotools import mask 
 from skimage.filters import gaussian
 
 from torch.utils.data import Dataset
@@ -25,7 +26,7 @@ class cocodataset(Dataset):
                                                             transform = None, 
                                                             dataset = None,
                                                             augment=False,
-                                                            *args):
+                                                            **kwargs):
         super(cocodataset,self).__init__()
         self.mode = mode
         logger.info("\n+=+=+=+=+= dataset:{} +=+=+=+=+=".format(mode))
@@ -40,13 +41,16 @@ class cocodataset(Dataset):
         ## augmentation setting
         self.augment = augment
         if self.augment:
-            logger.info('augmentation is used for training')
+            self.aug_scale = config.train.aug_scale
+            self.aug_rotation = config.train.aug_rotation
+            self.flip = config.train.aug_flip
+            logger.info('augmentation is used for training, setting :scale=1±{},rotation=0±{},flip={}(p=0.5)'
+                            .format(self.aug_scale,self.aug_rotation,self.flip))
+            
         else:
             logger.info('augmentation is not used ')
 
-        self.aug_scale = config.train.aug_scale
-        self.aug_rotation = config.train.aug_rotation
-        self.flip = True
+    
 
         if self.mode != 'dt':
             ## load train or val groundtruth data
@@ -64,10 +68,10 @@ class cocodataset(Dataset):
 
             self.sigma_factor = config.train.heatmap_peak_sigma_factor
              # From COCO statistics to determine the sigma for each keypoint's heatmap gaussian
-            self.sigmas = self.sigma_factor *np.array([1.0,1.0, 1.0, 1.0, 1.0, 1.1, \
-                                    1.1, 1.0, 1.0, 1.0,1.0, 1.2, 1.2, 1.0, 1.0, 1.0, 1.0])                                                                                      
-            logger.info('@ Standard deviation of gaussian kernel for \
-            different keypoints heatmaps is:\n==> {} '.format(self.sigmas))
+            self.sigmas = self.sigma_factor *np.array(
+                    [1.0,1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0])                                                                                      
+            logger.info('@ Standard deviation of gaussian kernel for different keypoints heatmaps is:\n==> {} '
+                                                .format(self.sigmas))
 
         if self.mode == 'dt':
             ## load detection results
@@ -132,9 +136,13 @@ class cocodataset(Dataset):
             for ann in annotations:
 
                 keypoints = ann['keypoints']
-                if ann['area'] <=0 or  max(keypoints)==0:
+                if ann['area'] <=0 or  max(keypoints)==0 or ann['iscrowd']==1:
                     continue
                 bbox = ann['bbox']
+                
+                rle = mask.frPyObjects(ann['segmentation'], height, width)
+                seg_mask = mask.decode(rle)    
+                
 
                 bbox =bbox_rectify(width,height,bbox,keypoints)
 
@@ -145,6 +153,7 @@ class cocodataset(Dataset):
                     'bbox_index':bbox_index,
                     'image_id':image_id,
                     'file_name':file_name,
+                    'mask':seg_mask,
 
                 })
 
@@ -154,7 +163,14 @@ class cocodataset(Dataset):
         return container
 
     def make_affine_matrix(self, bbox, target_size, margin=1, aug_rotation= 0, aug_scale=1):
-        "transform bbox ROI to adapat the net-input size"
+        """
+        transform bbox ROI to adapat the net-input size
+        
+        t: 3x3 matrix, means transform BBOX-ROI to input center-roi
+
+        rs: 3x3 matrix , means augmentation of rotation and scale
+
+        """
 
         (w,h)=target_size
         scale = min((w/margin) /bbox[2],
@@ -208,7 +224,12 @@ class cocodataset(Dataset):
         return keypoints
 
     def make_gt_heatmaps(self,keypoints):
-        # 17 x Heatmap_H x Heatmap_W
+        """
+        Generate `gt heatmaps` from keypoints coordinates 
+
+        We can generate adaptive `kernel size` and `peak value` of `gaussian distribution`
+
+        """
         
         heatmap_gt = np.zeros((len(keypoints),self.heatmap_size[1],self.heatmap_size[0]),dtype=np.float32)
         kpt_visible = np.array(keypoints[:,2])
@@ -231,6 +252,9 @@ class cocodataset(Dataset):
                 loose = 2/kpt_visible[id] # loose = 2: loose punishment for invisible label keypoints
                 heatmap_gt[id] /= loose 
 
+        kpt_visible = kpt_visible > 0
+        kpt_visible = kpt_visible.astype(np.float32)
+        
         return heatmap_gt, kpt_visible
 
     def multi_joints_peak_heatmap(self,keypoints):
@@ -303,14 +327,19 @@ class cocodataset(Dataset):
         index =     data['index']
         file_name = data['file_name']
         image_id =  data['image_id']
+        mask     =  data['mask'] if 'mask' in data else None
 
         image_path = self.get_image_path(file_name)
         #(h,w,3)
         input_data = cv2.imread( image_path )
 
-        #input_data = np.zeros_like(input,dtype=np.uint8)
-        #input_data[bbox[1]:bbox[1]+bbox[3],bbox[0]:bbox[0]+bbox[2],:] = \
-                                    #input[bbox[1]:bbox[1]+bbox[3],bbox[0]:bbox[0]+bbox[2],:]
+        #if self.mode != 'train':
+            # when inferencing, 
+            # we expect the input without the interference from outside bbox
+        #    input = input_data.copy()
+        #    input_data = np.zeros_like(input,dtype=np.uint8)
+        #    input_data[bbox[1]:bbox[1]+bbox[3],bbox[0]:bbox[0]+bbox[2],:] = \
+        #                            input[bbox[1]:bbox[1]+bbox[3],bbox[0]:bbox[0]+bbox[2],:]
 
         if self.mode == 'train' and self.augment == True:
             s = self.aug_scale # 0.3
@@ -326,8 +355,18 @@ class cocodataset(Dataset):
                                                 margin = self.margin_to_border,
                                                 aug_scale=aug_scale,
                                                 aug_rotation=aug_rotation)
+        if mask is not None:
 
-        input_data = cv2.warpAffine(input_data,affine_matrix[[0,1],:], self.input_size,)
+            input_data = cv2.warpAffine(input_data,affine_matrix[[0,1],:], self.input_size,)
+            mask       = cv2.warpAffine(mask      ,affine_matrix[[0,1],:], self.input_size) #note! mask:(h_,w_,1)->(h,w)
+            mask = cv2.resize(mask,self.heatmap_size)
+            mask = mask.astype(np.float32)
+            mask = mask[np.newaxis,:,:] #(1,h,w,x) or(1,h,w)
+
+            ## mask may be divided into several parts( ndim =4)
+            ## we make them into a singel heatmap
+            if mask.ndim == 4:
+                mask = np.amax(mask,axis=3)
 
         if self.transform is not None:
             #  torchvision.transforms.ToTensor() :
@@ -340,26 +379,33 @@ class cocodataset(Dataset):
 
             ## flip with 0.5 probability
             if self.augment and self.flip and np.random.random() <= 0.5 and self.transform is not None:
-                input_data = torch.flip(input_data,2)
+
+                input_data = torch.flip(input_data,[2])
+                mask = torch.from_numpy(mask)
+                mask = torch.flip(mask,[2]).numpy()
+                
                 keypoints[:,0] = self.input_size[0] - 1 - keypoints[:,0] 
 
             heatmap_gt, kpt_visible = self.make_gt_heatmaps(keypoints)
-            prior_mask = self.multi_joints_peak_heatmap(keypoints)
-
+            #prior_mask = self.multi_joints_peak_heatmap(keypoints)
+            #print(mask.shape)
+            
             info = {
                 'index':index,
-                'prior_mask':prior_mask
+                'prior_mask':mask
             }
 
-            return input_data , heatmap_gt, kpt_visible, info 
+            return input_data , heatmap_gt, kpt_visible, info
 
         if self.mode == 'val' or self.mode =='dt':
 
             keypoints = self.kpt_affine(keypoints,affine_matrix)
-            prior_mask = self.multi_joints_peak_heatmap(keypoints)
+            #prior_mask = self.multi_joints_peak_heatmap(keypoints)
+
+          
             info = {
                 'index':index,
-                'prior_mask':prior_mask
+                'prior_mask':mask
             }
 
             return input_data , image_id  , score, np.linalg.inv(affine_matrix), np.array(bbox), info #inverse
@@ -420,6 +466,8 @@ def test():
 
 
     tup = dataset[34]  #112234
+    print(tup)
+
     x = tup[0]
     print(tup[2])
     print(x.dtype)

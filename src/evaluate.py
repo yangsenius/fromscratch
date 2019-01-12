@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 ##################### evaluate #####################3
 
-def evaluate( model , dataset , config, output_dir):
+def evaluate( model , dataset , config, output_dir, use_extra = False , extra_model_B = None,extra_model_C =None):
 
     logger.info("\n=+=+=+=+=+=+=+=+=+=+=+= evalute +==+=+=+=+=+=+=+=+=+=+=+=+=+=+=\n")
     model.eval()
@@ -33,7 +33,18 @@ def evaluate( model , dataset , config, output_dir):
         for id ,(input,image_id ,score ,affine_matrix_inv, bbox, info) in enumerate(dataset):
 
             start = timer()
-            heatmap_dt, _ = model(input)
+
+            if use_extra :
+                extra_model_B.eval()
+                extra_model_C.eval()
+                B = extra_model_B
+                C = extra_model_C
+                mask_heatmap,_ = B(input)
+                kpt_heatmaps, _ = model(input)
+                heatmap_dt = C(kpt_heatmaps,mask_heatmap)
+                
+            else:
+                heatmap_dt, _ = model(input)
 
             #####
 
