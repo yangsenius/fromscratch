@@ -38,7 +38,7 @@ class cocodataset(Dataset):
         self.transform = transform
         self.margin_to_border = config.model.margin_to_border  # input border/bbox border
 
-        ## augmentation setting
+        ## data augmentation setting
         self.augment = augment
         if self.augment:
             self.aug_scale = config.train.aug_scale
@@ -46,12 +46,10 @@ class cocodataset(Dataset):
             self.flip = config.train.aug_flip
             logger.info('augmentation is used for training, setting :scale=1±{},rotation=0±{},flip={}(p=0.5)'
                             .format(self.aug_scale,self.aug_rotation,self.flip))
-            
         else:
             logger.info('augmentation is not used ')
 
     
-
         if self.mode != 'dt':
             ## load train or val groundtruth data
             self.images_root = os.path.join(images_dir ,mode +'2017')
@@ -196,10 +194,10 @@ class cocodataset(Dataset):
         rs[1, 1] = alpha
         rs[1, 2] = beta *(w/2) + (1-alpha)*(h/2)
         rs[2, 2] = 1
+        
         # matrix multiply
         # first: t , orignal-transform
         # second: rs, augment scale and augment rotation
-
         final_t = np.dot(rs,t)
         return final_t
 
@@ -257,63 +255,6 @@ class cocodataset(Dataset):
         
         return heatmap_gt, kpt_visible
 
-    def multi_joints_peak_heatmap(self,keypoints):
-        '''
-        We add a extra heatmap called `multi_joints_peak_heatmap` which 
-        generates all keypoints gaussian peaks in a single heatmap
-        we want use this heatmap layer to distinguish a person area mask.
-        We design this heatmap because we don't want to acquire more supervised information 
-        about human border mask.
-        Instead we want to utilize the keypoints position to generate probability information 
-        about the mask and it can be think as a prior information of human body
-
-        if the keypoint is visible, we make the corresponding gaussian peak value bigger
-        if the keypoint is invisible, we make the corresponding gaussian peak value smaller
-        The sigma of the gaussian peak distribution of keypoint is set according to 
-        Coco dataset statistic data like:
-
-        `sigmas` = 
-        `[.26, .25, .25, .35, .35,.79, .79, .72, .72, .62,.62, 1.07, 1.07, .87, .87, .89, .89]`
-        
-        In order to a obivous area of human mask, we should make gaussian kernel size big to 
-        cover more region,we multiply the `sigmas` with a `factor` value
-    
-        '''
-
-        sigmas =np.array([.26, .25, .25, .35, .35,.79, .79, .72, .72, .62,
-        .62, 1.07, 1.07, .87, .87, .89, .89])
-        factor_value = 6
-        sigmas = factor_value* sigmas
-
-        #multi_peak_heatmap =np.zeros((self.heatmap_size[1],self.heatmap_size[0]),dtype=np.float32)
-        
-        heatmap_gt = np.zeros((len(keypoints),self.heatmap_size[1],self.heatmap_size[0]),dtype=np.float32)
-        kpt_visible = np.array(keypoints[:,2])
-
-        downsample = self.input_size[1] / self.heatmap_size[1]
-
-        for id,kpt in enumerate(keypoints):
-            if kpt_visible[id]==0:
-                continue
-            if kpt_visible[id]==1 or kpt_visible[id]==2:  # 1: label but invisible 2: label visible
-
-                gt_x = min(int((kpt[0]+0.5)/downsample), self.heatmap_size[0]-1)
-                gt_y = min(int((kpt[1]+0.5)/downsample), self.heatmap_size[1]-1)
-
-                #sigma_loose = (2/kpt_visible[id])  # loose punishment for invisible label keypoints: sigma *2
-                heatmap_gt[id,gt_y,gt_x] = 1
-                heatmap_gt[id,:,:] = gaussian(heatmap_gt[id,:,:],sigma=sigmas[id])#*sigma_loose)
-                amx = np.amax(heatmap_gt[id])
-                heatmap_gt[id] /= amx  # make the max value of heatmap equals 1
-                loose = (2/kpt_visible[id]) # loose = 2: loose punishment for invisible label keypoints
-                heatmap_gt[id] /= loose 
-
-        #multi_peak_heatmap = heatmap_gt.sum(axis=0)
-        multi_peak_heatmap = np.amax(heatmap_gt, axis = 0, keepdims = True)
-
-        return multi_peak_heatmap
-
-
     def __len__(self,):
 
         return len(self.data)
@@ -350,15 +291,18 @@ class cocodataset(Dataset):
         else:
             aug_scale = 1
             aug_rotation = 0
+            self.margin_to_border = 1.1
 
         affine_matrix = self.make_affine_matrix(bbox,self.input_size,
                                                 margin = self.margin_to_border,
                                                 aug_scale=aug_scale,
                                                 aug_rotation=aug_rotation)
+
+        input_data = cv2.warpAffine(input_data,affine_matrix[[0,1],:], self.input_size,)
+
         if mask is not None:
 
-            input_data = cv2.warpAffine(input_data,affine_matrix[[0,1],:], self.input_size,)
-            mask       = cv2.warpAffine(mask      ,affine_matrix[[0,1],:], self.input_size) #note! mask:(h_,w_,1)->(h,w)
+            mask = cv2.warpAffine(mask      ,affine_matrix[[0,1],:], self.input_size) #note! mask:(h_,w_,1)->(h,w)
             mask = cv2.resize(mask,self.heatmap_size)
             mask = mask.astype(np.float32)
             mask = mask[np.newaxis,:,:] #(1,h,w,x) or(1,h,w)
@@ -387,8 +331,6 @@ class cocodataset(Dataset):
                 keypoints[:,0] = self.input_size[0] - 1 - keypoints[:,0] 
 
             heatmap_gt, kpt_visible = self.make_gt_heatmaps(keypoints)
-            #prior_mask = self.multi_joints_peak_heatmap(keypoints)
-            #print(mask.shape)
             
             info = {
                 'index':index,
@@ -400,8 +342,6 @@ class cocodataset(Dataset):
         if self.mode == 'val' or self.mode =='dt':
 
             keypoints = self.kpt_affine(keypoints,affine_matrix)
-            #prior_mask = self.multi_joints_peak_heatmap(keypoints)
-
           
             info = {
                 'index':index,

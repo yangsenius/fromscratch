@@ -97,7 +97,9 @@ def main():
     begin, end = config.train.epoch_begin, config.train.epoch_end
 
     optimizer = torch.optim.Adam(A.parameters(), lr = config.train.lr)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.95)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 
+                                                step_size = config.train.lr_step_size, 
+                                                gamma = config.train.lr_decay_gamma )
     best = 0
     logger.info("\n=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+= training +=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+==")
     for epoch in range(begin, end):

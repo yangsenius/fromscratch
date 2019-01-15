@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 ##################### evaluate #####################3
 
-def evaluate( model , dataset , config, output_dir, use_extra = False , extra_model_B = None,extra_model_C =None):
+def evaluate( model , dataset , config, output_dir, with_mask = False, use_refine = False ):
 
     logger.info("\n=+=+=+=+=+=+=+=+=+=+=+= evalute +==+=+=+=+=+=+=+=+=+=+=+=+=+=+=\n")
     model.eval()
@@ -34,19 +34,20 @@ def evaluate( model , dataset , config, output_dir, use_extra = False , extra_mo
 
             start = timer()
 
-            if use_extra :
-                extra_model_B.eval()
-                extra_model_C.eval()
-                B = extra_model_B
-                C = extra_model_C
-                mask_heatmap,_ = B(input)
-                kpt_heatmaps, _ = model(input)
-                heatmap_dt = C(kpt_heatmaps,mask_heatmap)
-                
-            else:
-                heatmap_dt, _ = model(input)
+            if with_mask: # for eval Resnet_Deconv_Boosting net
 
-            #####
+                if use_refine:
+
+                    _, _ , heatmap_refine_dt = model(input)
+                    heatmap_dt = heatmap_refine_dt
+
+                else: # original dt
+                    
+                    heatmap_dt, _ , _ = model(input)
+                
+            else: # for eval simple baseline net
+
+                heatmap_dt, _ = model(input)
 
             heatmap_dt = heatmap_dt.cpu()
             coordinate_argmax, maxval =  get_final_coord( heatmap_dt, post_processing = True)
