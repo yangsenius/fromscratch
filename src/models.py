@@ -253,13 +253,8 @@ def keypoints_output_net(cfg, is_train, num_layers , output_channels = None,  **
     block_class, layers = resnet_spec[num_layers]
     
     # whether use multi-task for keypoints and human body mask or not
-    if cfg.model.extra_mask_flag:
 
-        out_channels = cfg.model.keypoints_num + cfg.model.extra_mask_channels
-
-    else:
-        
-        out_channels = cfg.model.keypoints_num
+    out_channels = cfg.model.keypoints_num
     
     if output_channels is not None:
         

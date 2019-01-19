@@ -250,11 +250,17 @@ class ResNet_Deconv(nn.Module):
             mask = self.final_layer_mask(mask)
 
             if self.use_feature:
+
                 return kpt , mask , low_feature
             else:
                 return kpt , mask
         else:
-            return kpt
+
+            if self.use_feature:
+
+                return kpt, low_feature
+            else:
+                return kpt
 
     def init_weights(self, use_pretrained=False, pretrained=''):
         
@@ -287,17 +293,9 @@ class ResNet_Deconv(nn.Module):
             logger.info('=> no imagenet pretrained !')
             
 
-
-resnet_spec = {18: (BasicBlock, [2, 2, 2, 2]),
-               34: (BasicBlock, [3, 4, 6, 3]),
-               50: (Bottleneck, [3, 4, 6, 3]),
-               101: (Bottleneck, [3, 4, 23, 3]),
-               152: (Bottleneck, [3, 8, 36, 3])}
-
-
 ###  we design this class as `torch.jit.ScriptModule`
 
-class metabooster(torch.jit.ScriptModule):
+class metabooster(nn.Module):
     """
     a structure to boost or refine the `target heatmap` with `extra information` 
 
@@ -316,25 +314,50 @@ class metabooster(torch.jit.ScriptModule):
         
     
     """
-    def __init__(self, target_dim, extra_dim ):
+    def __init__(self, target_dim, extra_dim ,cfg):
         super(metabooster,self).__init__()
-        self.conv = torch.jit.trace(
+        #self.conv = torch.jit.trace(
             # 1x1 conv
-            nn.Conv2d( target_dim + extra_dim, target_dim, kernel_size = 1 ) , 
-            torch.randn(1,target_dim + extra_dim,4,4) )
+        #    nn.Conv2d(target_dim + extra_dim, target_dim, kernel_size = 1),
+        #    torch.randn(1,target_dim + extra_dim,4,4) )
+        h,w = cfg.model.heatmap_size.h,cfg.model.heatmap_size.w
+        self.mini_encoder_decoder = nn.Sequential(
+            # downsample 1/2
+            nn.Conv2d( target_dim + extra_dim, 128, kernel_size = 3, stride = 2, padding = 3 ,dilation=3),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            # downsample 1/2
+            nn.MaxPool2d(kernel_size=3,stride=2,padding=1),
 
-        self.sigmoid = nn.Sigmoid() # output range [0,1]
-        self.softmax = nn.Softmax2d()
+            # upsample x2
+            nn.Conv2d(128,64,kernel_size=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            nn.Upsample(scale_factor=2),
 
-    @torch.jit.script_method
+            # upsample x2
+            nn.Conv2d(64,32,kernel_size=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True),
+            nn.Upsample(scale_factor=2),
+
+            #reduce dim to target dim
+            nn.Conv2d(32,target_dim,kernel_size= 1 ),
+            nn.ReLU(inplace=True),
+            nn.Softmax2d()
+                        )       #,     torch.randn(1,target_dim+extra_dim,h,w))
+            
+        #self.sigmoid = nn.Sigmoid() # output range [0,1]
+        #self.softmax = nn.Softmax2d()
+
+    #@torch.jit.script_method
     def forward(self, target , extra ):
         # note: extra information maybe include image feature
-
         
         combine = torch.cat([target,extra],dim=1)
-
-        extra_info = self.sigmoid(self.conv(combine))
-
+        #print(combine.size())
+        extra_info = self.mini_encoder_decoder(combine)
+        #print(extra_info.size())
         # like np.amax and keepdims
         target_max = torch.max(target.view(target.size(0), target.size(1),-1), 2, keepdim=True)[0]
         target_max = target_max.unsqueeze(-1).repeat(1,1,target.size(2),target.size(3)) # keep same size as target  #
@@ -349,20 +372,24 @@ class metabooster(torch.jit.ScriptModule):
 
         target_refine = target * alpha +  extra_info * beta # *extra
 
+        #print('beta',beta)
+        #print('extra_info',extra_info)
+        #print('conv',[v.data for v in self.mini_encoder_decoder.parameters()][0])
+        #print('refine',target_refine)
         #target_refine = self.softmax(target_refine)
 
         return  target_refine
 
-class StackMetaBooster(torch.jit.ScriptModule): 
+class StackMetaBooster(nn.Module): 
     """
     stack the `metabooster` Module
 
     """
-    def __init__(self,target_dim, extra_dim, stack_nums):
+    def __init__(self,target_dim, extra_dim, stack_nums,cfg):
         super(StackMetaBooster,self).__init__()
         self.stack_nums = stack_nums
         self.stack_metaboosters = nn.ModuleList([ 
-            metabooster(target_dim, extra_dim) 
+            metabooster(target_dim, extra_dim,cfg) 
             for i in range(stack_nums)])
 
     def forward(self, target , extra):
@@ -392,7 +419,7 @@ def test():
     print(torch.argmax(target,1))
     print(torch.max(target))
 
-class ResNet_Deconv_Boosting(torch.jit.ScriptModule):
+class ResNet_Deconv_Boosting(nn.Module):
     """
     1. Use image to predict the `coarse keypoints heatmaps` and `body mask`
     2. Concencate `the low-level image feature` and `mask` information 
@@ -403,11 +430,9 @@ class ResNet_Deconv_Boosting(torch.jit.ScriptModule):
 
     """
 
-    def __init__(self,block, layers, out_channels, cfg, target_dim, extra_dim, stack_nums,  **kwargs):
+    def __init__(self,block, layers, out_channels, cfg, target_dim, extra_dim, stack_nums, **kwargs):
 
         super(ResNet_Deconv_Boosting,self).__init__()
-
-        assert cfg.model.extra_mask_flag == True,'mask infomation should be taken into consideration' 
 
         self.resnet_deconv = ResNet_Deconv(block, layers, out_channels, cfg,  **kwargs)
         '''self.resnet_deconv = torch.jit.trace( 
@@ -415,25 +440,30 @@ class ResNet_Deconv_Boosting(torch.jit.ScriptModule):
             torch.randn(1,3,256,256)
             )'''
         
-        self.boosting = nn.ModuleDict({
-
-            'process_convolution':nn.Conv2d(extra_dim, extra_dim, kernel_size = 5, padding = 2),
-            'process_activation':nn.Sigmoid(),
-            'StackMetaBooster': StackMetaBooster(target_dim,extra_dim,stack_nums)})
+        self.boosting =  StackMetaBooster(target_dim,extra_dim,stack_nums,cfg)
 
     def forward(self,x):
+        
+        out = self.resnet_deconv(x)
 
-        kpts , mask , feature = self.resnet_deconv(x)
-
+        kpts = out[:,0:17,:,:]
+        mask = out[:,17,:,:].unsqueeze(1)
+        
         # 'feature map size must be consistent with mask heatmap size in (n,*,h,w)'
-        extra = torch.cat([mask,feature],dim=1)
-
-        extra_pro = self.boosting['process_convolution'](extra )
-        extra_pro = self.boosting['process_activation'](extra_pro)
-        refine_kpts = self.boosting['StackMetaBooster'](kpts,extra_pro)
+        #extra = torch.cat([mask,feature],dim=1)
+        extra = mask
+        #print('kpts',kpts.grad)
+        #print('extra',extra.grad)
+        refine_kpts = self.boosting(kpts,extra)
+        #print('refine_o',refine_kpts)
 
         return kpts, mask , refine_kpts
 
+resnet_spec = {18: (BasicBlock, [2, 2, 2, 2]),
+               34: (BasicBlock, [3, 4, 6, 3]),
+               50: (Bottleneck, [3, 4, 6, 3]),
+               101: (Bottleneck, [3, 4, 23, 3]),
+               152: (Bottleneck, [3, 8, 36, 3])}
 
 
 def Kpt_and_Mask_Boosting_Net(cfg, is_train, num_layers,  **kwargs):
@@ -441,14 +471,22 @@ def Kpt_and_Mask_Boosting_Net(cfg, is_train, num_layers,  **kwargs):
     block_class, layers = resnet_spec[num_layers]
     
    
+    if cfg.model.only_add_mask_channel:
 
-    out_channels = cfg.model.keypoints_num
-    extra_dim = cfg.model.extra_mask_channels + 64 # extra_feature_channels, from resent-config
+        out_channels = cfg.model.keypoints_num + cfg.model.mask_channel_num
+    else:
+        out_channels = cfg.model.keypoints_num
+
+    target_dim = cfg.model.keypoints_num
+    extra_dim = cfg.model.mask_channel_num #+ 64 # extra_feature_channels, from resent-config
     stack_nums = cfg.model.booster_stacks
 
+    assert cfg.model.extra_mask_module != cfg.model.only_add_mask_channel, \
+                    " Warning: do not choose both modes at the same time"
+    
     model = ResNet_Deconv_Boosting(block_class, layers, out_channels, cfg,
-                                            out_channels, extra_dim, stack_nums,  
-                                            use_mask = cfg.model.extra_mask_flag,
+                                            target_dim , extra_dim, stack_nums,  
+                                            use_mask = cfg.model.extra_mask_module,
                                             use_feature = cfg.model.extra_feature_flag,
                                             **kwargs)
 

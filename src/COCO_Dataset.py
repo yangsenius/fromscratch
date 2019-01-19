@@ -247,8 +247,8 @@ class cocodataset(Dataset):
                 heatmap_gt[id,:,:] = gaussian(heatmap_gt[id,:,:],sigma=self.sigmas[id])#*sigma_loose)
                 amx = np.amax(heatmap_gt[id])
                 heatmap_gt[id] /= amx  # make the max value of heatmap equals 1
-                loose = 2/kpt_visible[id] # loose = 2: loose punishment for invisible label keypoints
-                heatmap_gt[id] /= loose 
+                #loose = 2/kpt_visible[id] # loose = 2: loose punishment for invisible label keypoints
+                #heatmap_gt[id] /= loose 
 
         kpt_visible = kpt_visible > 0
         kpt_visible = kpt_visible.astype(np.float32)

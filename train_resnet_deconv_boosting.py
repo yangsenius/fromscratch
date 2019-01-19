@@ -50,15 +50,15 @@ def main():
 
     logger = logging_set(output_dir)
     logger.info('\n================ experient name:[{}] ===================\n'.format(arg.exp_name))
-    os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "2,3"
 
     torch.backends.cudnn.enabled = True
  
     config = edict( yaml.load( open(arg.cfg,'r')))
 
     ######   we use extra information to boost the keypoints results
-    config.model.extra_mask_flag = True
-    config.model.extra_feature_flag = True
+    #config.model.extra_mask_flag = True
+    #config.model.extra_feature_flag = True
 
     logger.info('------------------------------ configuration ---------------------------')
     logger.info('\n==> available {} GPUs , numbers are {}\n'.format(torch.cuda.device_count(),os.environ["CUDA_VISIBLE_DEVICES"]))
@@ -68,8 +68,10 @@ def main():
     A = Kpt_and_Mask_Boosting_Net(config, is_train=True , num_layers = 50)
     A = torch.nn.DataParallel(A).cuda()
     logger.info(">>> total params of Model: {:.2f}M".format(sum(p.numel() for p in A.parameters()) / 1000000.0))
+   # print(A.module.boosting.stack_metaboosters[0].graph)
+    logger.info('------------------------------- Model Struture ----------------------------')
+    logger.info(A)
     
-
     loss = MSELoss()
 
     train_dataset = cocodataset( config, config.images_root_dir,
@@ -95,15 +97,15 @@ def main():
                             ]))
 
 
-    train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size = 32, shuffle = True , num_workers = 4 , pin_memory=True )
-    valid_dataloader = torch.utils.data.DataLoader(valid_dataset, batch_size = 16, shuffle = False , num_workers = 4 , pin_memory=True )
+    train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size = config.train.batchsize, shuffle = True , num_workers = 4 , pin_memory=True )
+    valid_dataloader = torch.utils.data.DataLoader(valid_dataset, batch_size = config.test.batchsize, shuffle = False , num_workers = 4 , pin_memory=True )
 
 
     begin, end = config.train.epoch_begin, config.train.epoch_end
 
     # in `DataParallel` mode ,  all parameters of the `state_dict` are wraped in `module`
     optimizer_base = torch.optim.Adam(A.module.resnet_deconv.parameters(), lr = config.train.lr)
-    optimizer_boosting = torch.optim.Adam(A.module.boosting.parameters(), lr = 0.01*config.train.lr)
+    optimizer_boosting = torch.optim.Adam(A.module.boosting.parameters(), lr = config.train.lr)
 
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer_base, step_size=config.train.lr_step_size, 
                                                             gamma = config.train.lr_decay_gamma)
@@ -147,7 +149,10 @@ def main():
             heatmap_dt_loss , _ = loss(heatmap_dt, heatmap_gt, kpt_visible)
             mask_loss =  ((prior_mask_dt- prior_mask_gt)**2).sum(dim=3).sum(dim=2).sum(dim=1).mean(dim=0)
                   
-            backward_loss = mask_loss + heatmap_dt_loss 
+            backward_loss = 0.5*mask_loss + heatmap_dt_loss 
+
+            #print(heatmap_dt)
+            #print(refine_heatmap_dt)
 
             # only when resnet_deconv has a better results,we begin to train the boosting part
             retain_graph_flag = True if best_o > result_thres else False
@@ -171,6 +176,9 @@ def main():
 
             mask_loss = mask_loss.item()
             heatmap_dt_loss = heatmap_dt_loss.item()
+
+            #print('refine',A.module.boosting.stack_metaboosters[0].mini_encoder_decoder.data)
+            #print('mask,')
 
             if iters % 100 == 0:
 

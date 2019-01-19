@@ -10,10 +10,14 @@ model:
         h: 96
     margin_to_border: 1.15 # >=1
     
-    ## extra
-    extra_mask_flag: false
+    ## use an extra mask module branch or only add a channel to
+    mask_channel_num: 1
+
+    only_add_mask_channel: True
+
+    extra_mask_module: false
     extra_feature_flag: false
-    extra_mask_channels: 1
+    
     booster_stacks: 1 # meta-booster nums
     boosting_requirement: 0.5
 
@@ -26,7 +30,7 @@ train:
     epoch_end: 150
     lr: 0.001
     lr_step_size: 30
-    lr_decay_gamma: 0.5
+    lr_decay_gamma: 0.4
     batchsize: 64
     heatmap_peak_sigma_factor: 3
     aug_scale: 0.2
