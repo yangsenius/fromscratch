@@ -13,17 +13,17 @@ model:
     ## use an extra mask module branch or only add a channel to
     mask_channel_num: 1
 
-    only_add_mask_channel: True
+    only_add_mask_channel: false
 
-    extra_mask_module: false
+    extra_mask_module: true
     extra_feature_flag: false
     
     booster_stacks: 1 # meta-booster nums
     boosting_requirement: 0.5
 
-images_root_dir: '../data/coco/images/'
-annotation_root_dir: '../data/coco/annotations/'
-person_detection_results_path: '../data/coco/person_detection_results/COCO_val2017_detections_AP_H_56_person.json'
+images_root_dir: '/home/public_dataset/coco/images/'
+annotation_root_dir: '/home/public_dataset/coco/annotations/'
+person_detection_results_path: '/home/public_dataset/coco/person_detection_results/COCO_val2017_detections_AP_H_56_person.json'
 
 train:
     epoch_begin: 0
@@ -33,10 +33,12 @@ train:
     lr_decay_gamma: 0.4
     batchsize: 64
     heatmap_peak_sigma_factor: 3
-    aug_scale: 0.2
-    aug_rotation: 30 
+    aug_scale: 0.3
+    aug_rotation: 40
     aug_flip: false
     augmentation: true
+
+    
 
     
     

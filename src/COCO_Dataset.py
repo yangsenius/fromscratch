@@ -44,11 +44,13 @@ class cocodataset(Dataset):
             self.aug_scale = config.train.aug_scale
             self.aug_rotation = config.train.aug_rotation
             self.flip = config.train.aug_flip
-            logger.info('augmentation is used for training, setting :scale=1±{},rotation=0±{},flip={}(p=0.5)'
+            logger.info('augmentation is used for training, setting :scale=1±{},rotation=0±{},flip(p=0.5)={}'
                             .format(self.aug_scale,self.aug_rotation,self.flip))
         else:
             logger.info('augmentation is not used ')
 
+        self.use_mask = config.model.only_add_mask_channel or config.model.extra_mask_module
+        logger.info('need the grountruth mask information == {}'.format(self.use_mask))
     
         if self.mode != 'dt':
             ## load train or val groundtruth data
@@ -138,9 +140,11 @@ class cocodataset(Dataset):
                     continue
                 bbox = ann['bbox']
                 
-                rle = mask.frPyObjects(ann['segmentation'], height, width)
-                seg_mask = mask.decode(rle)    
-                
+                if self.use_mask:
+                    rle = mask.frPyObjects(ann['segmentation'], height, width)
+                    seg_mask = mask.decode(rle)
+                else:
+                    seg_mask = ''
 
                 bbox =bbox_rectify(width,height,bbox,keypoints)
 
@@ -268,7 +272,7 @@ class cocodataset(Dataset):
         index =     data['index']
         file_name = data['file_name']
         image_id =  data['image_id']
-        mask     =  data['mask'] if 'mask' in data else None
+        mask     =  data['mask'] if 'mask' in data else ''
 
         image_path = self.get_image_path(file_name)
         #(h,w,3)
@@ -300,7 +304,7 @@ class cocodataset(Dataset):
 
         input_data = cv2.warpAffine(input_data,affine_matrix[[0,1],:], self.input_size,)
 
-        if mask is not None:
+        if mask is not '':
 
             mask = cv2.warpAffine(mask      ,affine_matrix[[0,1],:], self.input_size) #note! mask:(h_,w_,1)->(h,w)
             mask = cv2.resize(mask,self.heatmap_size)
@@ -317,12 +321,18 @@ class cocodataset(Dataset):
             #  (H,W,3) range [0,255] numpy.ndarray  ==> (c,h,w) [0.0,1.0] torch.FloatTensor
             input_data = self.transform(input_data)
 
+        info = {}
+        info['index'] = index
+
+        if mask is not '':
+            info['prior_mask'] = mask
+
         if self.mode == 'train':
 
             keypoints = self.kpt_affine(keypoints,affine_matrix)
 
             ## flip with 0.5 probability
-            if self.augment and self.flip and np.random.random() <= 0.5 and self.transform is not None:
+            if self.augment and self.flip and np.random.random() <= 0.5 and self.transform is not None and mask is not '':
 
                 input_data = torch.flip(input_data,[2])
                 mask = torch.from_numpy(mask)
@@ -332,23 +342,11 @@ class cocodataset(Dataset):
 
             heatmap_gt, kpt_visible = self.make_gt_heatmaps(keypoints)
             
-            info = {
-                'index':index,
-                'prior_mask':mask
-            }
-
             return input_data , heatmap_gt, kpt_visible, info
 
         if self.mode == 'val' or self.mode =='dt':
 
-            keypoints = self.kpt_affine(keypoints,affine_matrix)
-          
-            info = {
-                'index':index,
-                'prior_mask':mask
-            }
-
-            return input_data , image_id  , score, np.linalg.inv(affine_matrix), np.array(bbox), info #inverse
+            return input_data , image_id  , score, np.linalg.inv(affine_matrix), np.array(bbox), info 
 
 def bbox_rectify(width,height,bbox,keypoints,margin=5):
         """

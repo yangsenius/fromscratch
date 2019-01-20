@@ -25,7 +25,7 @@ import datetime
 def args():
     parser = argparse.ArgumentParser(description='Train keypoints network')
     parser.add_argument('--cfg',            help='experiment configure file name',  required=True,   default='config.yaml', type=str)
-    parser.add_argument('--exp_name',       help='experiment name',        default='default_exp'     , type=str)
+    parser.add_argument('--exp_name',       help='experiment name',        default='default_train_baseline'     , type=str)
 
     args = parser.parse_args()
     return args
@@ -50,11 +50,15 @@ def main():
 
     logger = logging_set(output_dir)
     logger.info('\n================ experient name:[{}] ===================\n'.format(arg.exp_name))
-    os.environ["CUDA_VISIBLE_DEVICES"] = "2,3"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
     torch.backends.cudnn.enabled = True
  
     config = edict( yaml.load( open(arg.cfg,'r')))
 
+    # Baseline model does not need mask information
+    config.model.only_add_mask_channel = False
+    config.model.extra_mask_module = False
+    
     logger.info('------------------------------ configuration ---------------------------')
     logger.info('\n==> available {} GPUs , numbers are {}\n'.format(torch.cuda.device_count(),os.environ["CUDA_VISIBLE_DEVICES"]))
     logger.info(pprint.pformat(config))

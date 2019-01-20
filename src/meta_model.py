@@ -145,6 +145,7 @@ class ResNet_Deconv(nn.Module):
         self.use_mask = use_mask
 
         if use_mask:
+            logger.info('creat a new deconv block to predict the human mask')
             mask_channel = 1
             self.deconv_layers_mask = self._make_deconv_layer(
                 layer_num,               # layers
@@ -441,21 +442,24 @@ class ResNet_Deconv_Boosting(nn.Module):
             )'''
         
         self.boosting =  StackMetaBooster(target_dim,extra_dim,stack_nums,cfg)
-
+        self.mask_mode = 'only_add_mask_channel' if cfg.model.only_add_mask_channel else 'extra mask module'
+    
     def forward(self,x):
         
-        out = self.resnet_deconv(x)
+        if self.mask_mode == 'only_add_mask_channel':
+            out = self.resnet_deconv(x)
 
-        kpts = out[:,0:17,:,:]
-        mask = out[:,17,:,:].unsqueeze(1)
-        
+            kpts = out[:,0:17,:,:]
+            mask = out[:,17,:,:].unsqueeze(1)
+
+        else:
+
+            kpts, mask = self.resnet_deconv(x)
+            
         # 'feature map size must be consistent with mask heatmap size in (n,*,h,w)'
         #extra = torch.cat([mask,feature],dim=1)
         extra = mask
-        #print('kpts',kpts.grad)
-        #print('extra',extra.grad)
         refine_kpts = self.boosting(kpts,extra)
-        #print('refine_o',refine_kpts)
 
         return kpts, mask , refine_kpts
 
@@ -474,8 +478,11 @@ def Kpt_and_Mask_Boosting_Net(cfg, is_train, num_layers,  **kwargs):
     if cfg.model.only_add_mask_channel:
 
         out_channels = cfg.model.keypoints_num + cfg.model.mask_channel_num
+        logger.info('output channels are added by mask channels ,total num = {} + {} = {} '
+                            .format(cfg.model.keypoints_num,cfg.model.mask_channel_num,out_channels))
     else:
         out_channels = cfg.model.keypoints_num
+        logger.info('output channels num = {} '.format(out_channels))
 
     target_dim = cfg.model.keypoints_num
     extra_dim = cfg.model.mask_channel_num #+ 64 # extra_feature_channels, from resent-config

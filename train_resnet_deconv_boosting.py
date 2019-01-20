@@ -60,17 +60,20 @@ def main():
     #config.model.extra_mask_flag = True
     #config.model.extra_feature_flag = True
 
+    A = Kpt_and_Mask_Boosting_Net(config, is_train=True , num_layers = 50)
+    A = torch.nn.DataParallel(A).cuda()
+   
+     # print(A.module.boosting.stack_metaboosters[0].graph)
+    logger.info('------------------------------- Model Struture ----------------------------')
+    logger.info(A)
+
     logger.info('------------------------------ configuration ---------------------------')
     logger.info('\n==> available {} GPUs , numbers are {}\n'.format(torch.cuda.device_count(),os.environ["CUDA_VISIBLE_DEVICES"]))
     logger.info(pprint.pformat(config))
     logger.info('------------------------------- -------- ----------------------------')
 
-    A = Kpt_and_Mask_Boosting_Net(config, is_train=True , num_layers = 50)
-    A = torch.nn.DataParallel(A).cuda()
     logger.info(">>> total params of Model: {:.2f}M".format(sum(p.numel() for p in A.parameters()) / 1000000.0))
-   # print(A.module.boosting.stack_metaboosters[0].graph)
-    logger.info('------------------------------- Model Struture ----------------------------')
-    logger.info(A)
+
     
     loss = MSELoss()
 
@@ -148,8 +151,9 @@ def main():
 
             heatmap_dt_loss , _ = loss(heatmap_dt, heatmap_gt, kpt_visible)
             mask_loss =  ((prior_mask_dt- prior_mask_gt)**2).sum(dim=3).sum(dim=2).sum(dim=1).mean(dim=0)
-                  
-            backward_loss = 0.5*mask_loss + heatmap_dt_loss 
+            
+            mask_loss_weight = config.train.mask_loss_weight
+            backward_loss = mask_loss_weight * mask_loss + heatmap_dt_loss 
 
             #print(heatmap_dt)
             #print(refine_heatmap_dt)
