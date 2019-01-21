@@ -16,10 +16,10 @@ model:
     only_add_mask_channel: false
 
     extra_mask_module: true
-    extra_feature_flag: false
+    extra_feature_flag: true
     
     booster_stacks: 1 # meta-booster nums
-    boosting_requirement: 0.5
+    boosting_requirement: 0.4
 
 images_root_dir: '/home/public_dataset/coco/images/'
 annotation_root_dir: '/home/public_dataset/coco/annotations/'
@@ -37,6 +37,9 @@ train:
     aug_rotation: 40
     aug_flip: false
     augmentation: true
+
+    #
+    mask_loss_weight: 0.5
 
     
 

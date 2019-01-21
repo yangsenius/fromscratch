@@ -443,22 +443,42 @@ class ResNet_Deconv_Boosting(nn.Module):
         
         self.boosting =  StackMetaBooster(target_dim,extra_dim,stack_nums,cfg)
         self.mask_mode = 'only_add_mask_channel' if cfg.model.only_add_mask_channel else 'extra mask module'
+        self.feature_mode = cfg.model.extra_feature_flag
     
     def forward(self,x):
         
         if self.mask_mode == 'only_add_mask_channel':
-            out = self.resnet_deconv(x)
+
+            if self.feature_mode:
+
+                out, feature = self.resnet_deconv(x)
+
+            else:
+                out = self.resnet_deconv(x)
 
             kpts = out[:,0:17,:,:]
             mask = out[:,17,:,:].unsqueeze(1)
 
         else:
 
-            kpts, mask = self.resnet_deconv(x)
+            if self.feature_mode:
+
+                kpts, mask, feature = self.resnet_deconv(x)
+                
+            else:
+                kpts, mask = self.resnet_deconv(x)
+        
+        if self.feature_mode:
+
+            extra = mask * feature   # use mask weight to filter background information
+            
+        else:
+
+            extra = mask
             
         # 'feature map size must be consistent with mask heatmap size in (n,*,h,w)'
         #extra = torch.cat([mask,feature],dim=1)
-        extra = mask
+       
         refine_kpts = self.boosting(kpts,extra)
 
         return kpts, mask , refine_kpts
