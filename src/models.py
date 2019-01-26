@@ -198,12 +198,14 @@ class PoseResNet(nn.Module):
         x = self.relu(x)
         x = self.maxpool(x)
 
+        feature = x.clone()
+
         x = self.layer1(x)
         x = self.layer2(x)
         x = self.layer3(x)
         x = self.layer4(x)
         
-        feature = x.clone()
+        
         x = self.deconv_layers(x)
         x = self.final_layer(x)
 
@@ -213,25 +215,21 @@ class PoseResNet(nn.Module):
         logger.info('=> init deconv weights from normal distribution')
         for name, m in self.deconv_layers.named_modules():
             if isinstance(m, nn.ConvTranspose2d):
-                #logger.info('=> init {}.weight as normal(0, 0.001)'.format(name))
-                #logger.info('=> init {}.bias as 0'.format(name))
+              
                 nn.init.normal_(m.weight, std=0.001)
                 if self.deconv_with_bias:
                     nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.BatchNorm2d):
-                #logger.info('=> init {}.weight as 1'.format(name))
-                #logger.info('=> init {}.bias as 0'.format(name))
+               
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
         logger.info('=> init final conv weights from normal distribution')
         for m in self.final_layer.modules():
             if isinstance(m, nn.Conv2d):
-                # nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-                #logger.info('=> init {}.weight as normal(0, 0.001)'.format(name))
-                #logger.info('=> init {}.bias as 0'.format(name))
+               
                 nn.init.normal_(m.weight, std=0.001)
                 nn.init.constant_(m.bias, 0)
-        if use_pretrained == True:
+        if use_pretrained:
             pretrained_state_dict = torch.load(pretrained)
             logger.info('=> loading pretrained model {}'.format(pretrained))
             self.load_state_dict(pretrained_state_dict, strict=False)
@@ -263,7 +261,8 @@ def keypoints_output_net(cfg, is_train, num_layers , output_channels = None,  **
     model = PoseResNet(block_class, layers, out_channels, cfg, **kwargs)
 
     if is_train and cfg.model.init_weights:
-        model.init_weights(pretrained=cfg.model.pretrained_path)
+        model.init_weights(use_pretrained=cfg.model.use_pretrained,
+                                pretrained=cfg.model.pretrained_path)
 
     return model
 

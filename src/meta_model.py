@@ -315,13 +315,13 @@ class metabooster(nn.Module):
         
     
     """
-    def __init__(self, target_dim, extra_dim ,cfg):
+    def __init__(self, target_dim, extra_dim):
         super(metabooster,self).__init__()
         #self.conv = torch.jit.trace(
             # 1x1 conv
         #    nn.Conv2d(target_dim + extra_dim, target_dim, kernel_size = 1),
         #    torch.randn(1,target_dim + extra_dim,4,4) )
-        h,w = cfg.model.heatmap_size.h,cfg.model.heatmap_size.w
+        #h,w = cfg.model.heatmap_size.h,cfg.model.heatmap_size.w
         self.mini_encoder_decoder = nn.Sequential(
             # downsample 1/2
             nn.Conv2d( target_dim + extra_dim, 128, kernel_size = 3, stride = 2, padding = 3 ,dilation=3),
@@ -386,11 +386,11 @@ class StackMetaBooster(nn.Module):
     stack the `metabooster` Module
 
     """
-    def __init__(self,target_dim, extra_dim, stack_nums,cfg):
+    def __init__(self,target_dim, extra_dim, stack_nums):
         super(StackMetaBooster,self).__init__()
         self.stack_nums = stack_nums
         self.stack_metaboosters = nn.ModuleList([ 
-            metabooster(target_dim, extra_dim,cfg) 
+            metabooster(target_dim, extra_dim) 
             for i in range(stack_nums)])
 
     def forward(self, target , extra):
@@ -505,7 +505,10 @@ def Kpt_and_Mask_Boosting_Net(cfg, is_train, num_layers,  **kwargs):
         logger.info('output channels num = {} '.format(out_channels))
 
     target_dim = cfg.model.keypoints_num
-    extra_dim = cfg.model.mask_channel_num #+ 64 # extra_feature_channels, from resent-config
+    extra_dim = 64 if cfg.model.extra_feature_flag else cfg.model.mask_channel_num
+                                                    #+ 64 # extra_feature_channels, from resent-config
+    logger.info('==>boosting parts: target dim = {} , extra dim = {}'.format(target_dim, extra_dim))
+
     stack_nums = cfg.model.booster_stacks
 
     assert cfg.model.extra_mask_module != cfg.model.only_add_mask_channel, \

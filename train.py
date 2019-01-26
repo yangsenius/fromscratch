@@ -26,7 +26,8 @@ def args():
     parser = argparse.ArgumentParser(description='Train keypoints network')
     parser.add_argument('--cfg',            help='experiment configure file name',  required=True,   default='config.yaml', type=str)
     parser.add_argument('--exp_name',       help='experiment name',        default='default_train_baseline'     , type=str)
-
+    parser.add_argument('--gpu',            help='gpu ids',                 default = '0,1',                      type =str)
+    
     args = parser.parse_args()
     return args
 
@@ -50,7 +51,7 @@ def main():
 
     logger = logging_set(output_dir)
     logger.info('\n================ experient name:[{}] ===================\n'.format(arg.exp_name))
-    os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
+    os.environ["CUDA_VISIBLE_DEVICES"] = arg.gpu
     torch.backends.cudnn.enabled = True
  
     config = edict( yaml.load( open(arg.cfg,'r')))
@@ -104,6 +105,7 @@ def main():
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 
                                                 step_size = config.train.lr_step_size, 
                                                 gamma = config.train.lr_decay_gamma )
+                                                
     best = 0
     logger.info("\n=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+= training +=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+==")
     for epoch in range(begin, end):
@@ -114,10 +116,13 @@ def main():
             
             start = timer()
             optimizer.zero_grad()
+
             input = input.cuda()
             heatmap_gt = heatmap_gt.cuda()
             kpt_visible = kpt_visible.float().cuda()
+
             A = A.train()
+
             heatmap_dt, _ = A(input)
 
             backward_loss , losses = loss(heatmap_dt, heatmap_gt, kpt_visible)
@@ -133,15 +138,17 @@ def main():
             if iters % 100 == 0:
 
                logger.info('epoch: {}\t iters:[{}|{}]\t loss:{:.4f}\t feed-speed:{:.2f} samples/s'.format(epoch,iters,len(train_dataloader),backward_loss,len(input)/time))
-        ## eval ##
+        
+
+        # evalute
         eval_results = evaluate( A, valid_dataloader , config, output_dir)
 
         logger.info('==> mAP is: {:.3f}\n'.format(eval_results[0]))
-        torch.save(A.cpu().state_dict(),os.path.join(output_dir,'ckpt.tar'))
-        A.cuda()
+        torch.save(A.module.state_dict(),os.path.join(output_dir,'ckpt.tar'))
+
         if  eval_results[0] > best :
             best = eval_results[0]
-            torch.save(A.state_dict(),os.path.join(output_dir,'best_ckpt.tar'))
+            torch.save(A.module.state_dict(),os.path.join(output_dir,'best_ckpt.tar'))
             logger.info('\n!(^ 0 ^)! New Best mAP = {} and all oks metrics is {} \n'.format(best,eval_results))
             
 

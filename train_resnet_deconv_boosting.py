@@ -50,7 +50,7 @@ def main():
 
     logger = logging_set(output_dir)
     logger.info('\n================ experient name:[{}] ===================\n'.format(arg.exp_name))
-    os.environ["CUDA_VISIBLE_DEVICES"] = "2,3"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
 
     torch.backends.cudnn.enabled = True
  
@@ -61,7 +61,7 @@ def main():
     #config.model.extra_feature_flag = True
 
     A = Kpt_and_Mask_Boosting_Net(config, is_train=True , num_layers = 50)
-    A = torch.nn.DataParallel(A).cuda()
+    
    
      # print(A.module.boosting.stack_metaboosters[0].graph)
     logger.info('------------------------------- Model Struture ----------------------------')
@@ -73,8 +73,10 @@ def main():
     logger.info('------------------------------- -------- ----------------------------')
 
     logger.info(">>> total params of Model: {:.2f}M".format(sum(p.numel() for p in A.parameters()) / 1000000.0))
+    logger.info(">>> total params of Boosting: {:.2f}M".format(sum(p.numel() for p in A.boosting.parameters()) / 1000000.0))
 
-    
+    A = torch.nn.DataParallel(A).cuda()
+
     loss = MSELoss()
 
     train_dataset = cocodataset( config, config.images_root_dir,

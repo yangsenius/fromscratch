@@ -20,13 +20,14 @@ logger = logging.getLogger(__name__)
 
 ##################### evaluate #####################3
 
-def evaluate( model , dataset , config, output_dir, with_mask = False, use_refine = False ):
+def evaluate( model , dataset , config, output_dir, with_mask = False, use_refine = False ,boosting = None):
 
     logger.info("\n=+=+=+=+=+=+=+=+=+=+=+= evalute +==+=+=+=+=+=+=+=+=+=+=+=+=+=+=\n")
     model.eval()
 
     predict_results =[]
-
+    flip_test = False
+    logger.info("flip test is {}".format(flip_test))
     #####   output results in val-or-test dataset  #########
     with torch.no_grad():
 
@@ -48,7 +49,33 @@ def evaluate( model , dataset , config, output_dir, with_mask = False, use_refin
             else: # for eval simple baseline net
 
                 heatmap_dt, _ = model(input)
+                z = heatmap_dt.clone()
 
+                # flip-test
+                if flip_test:
+
+                    input_filp = input.flip([3])
+                    heatmap_dt_flip,_ = model(input_filp)
+
+                    # need to change the heatmap order
+                    heatmap_dt_flip = symmetric_exchange_after_flip(heatmap_dt_flip)
+                    heatmap_dt = ( z  + heatmap_dt_flip.flip([3]) ) * 0.5
+            
+            if boosting is not None:
+
+                boosting.eval()
+                prior_mask_gt = info['prior_mask']
+                prior_mask_gt = prior_mask_gt.cuda()
+                input = input.cuda()
+                
+                kpts ,feature = model(input)
+                
+                extra_info = prior_mask_gt * feature
+                #extra_info = torch.cat([feature,prior_mask_gt],dim=1)
+                heatmap_dt = boosting(kpts,extra_info)
+
+
+            # from heatmap compute keypoints coordinate
             heatmap_dt = heatmap_dt.cpu()
             coordinate_argmax, maxval =  get_final_coord( heatmap_dt, post_processing = True)
 
@@ -56,7 +83,7 @@ def evaluate( model , dataset , config, output_dir, with_mask = False, use_refin
                                                     heatmap_coord=coordinate_argmax,
                                                     bounding = bbox)
 
-            pred_kpt[:,:,2] = maxval[:,:]
+            pred_kpt[:,:,2] = maxval[:,:] # regard max-value as score
             pred_kpt = pred_kpt.numpy().round(3).reshape(len(pred_kpt),-1)
             
             index = info['index']
@@ -104,7 +131,7 @@ def evaluate( model , dataset , config, output_dir, with_mask = False, use_refin
             kpts_mean_score = sum(high_score_kpt)/(len(high_score_kpt)+1e-5)
             sample['score'] = bbox_score * kpts_mean_score
 
-        ## oks nms
+        # oks nms
         kpts = oks_nms(kpts, config.test.oks_nms_threshold)
         #kpts = oks_nms_sb(kpts, config.test.oks_nms_threshold)
 
@@ -137,10 +164,7 @@ def coco_eval(config, dt, output_dir):
     """
 
     gt_path = os.path.join( config.annotation_root_dir,'person_keypoints_val2017.json')
-
-    
     dt_path = os.path.join(output_dir,'dt.json')
-
 
     with open(dt_path, 'w') as f:
         json.dump(dt, f)
@@ -160,8 +184,9 @@ def coco_eval(config, dt, output_dir):
 
 
 
-
-###########################  Util Functions    ##########################
+##############################################################################
+###########################  Utilization Functions    ########################
+##############################################################################
 
 def get_max_coord(target):
 
@@ -260,19 +285,29 @@ def oks_nms(kpts_candidates, threshold):
     """
     keypoints : data-format: [17,3]
 
-    `NMS algorithm`
-         while(1):
-     `1.` take max scores keypoints(index = 0) as groudtruth 'gt', if break or continue
+    `NMS algorithm`:
 
-     `2.` supression all other keypoints 'kpt' and pop it from the list, if computeOKS(gt,kpt) > threshold  (note: supression is a inner-while)
-            id = index + 1
-            while(1):
-                if break or continue
-                if computeOKS(gt,kpt(id)) > threshold
-                   list.pop()
-                id +=1
+    index = 0
 
-            index +=1
+    while(1):
+
+        step: `1.` take highest score keypoints(=index) as groudtruth 'gt', judege if break or continue
+
+        step: `2.` supression all other keypoints 'kpt' and pop it from the list, judege if computeOKS(gt,kpt) > threshold  
+
+            (note: supression is a inner-while)
+
+                id = index + 1
+                while(1):
+
+                    if break or continue
+                    if computeOKS(gt,kpt(id)) > threshold
+                    list.pop()
+                    id +=1
+
+                index +=1
+
+        step: `3.` goto step `1`
 
     """
     # data format [51] ->[17,3]
@@ -404,6 +439,22 @@ def oks_nms_sb(kpts_db, thresh, sigmas=None, in_vis_thre=None):
         kpts_left.append(kpts_db[ke])
 
     return kpts_left
+
+
+def symmetric_exchange_after_flip(heatmap_flip):
+
+    parts = [[1,2],[3,4],[5,6],[7,8],[9,10],[11,12],[13,14],[15,16]]
+
+    heatmap = heatmap_flip.clone()
+    for part in parts:
+
+        tmp = heatmap[:,part[1],:,:].clone()
+        heatmap[:,part[1],:,:] = heatmap[:,part[0],:,:].clone()
+        heatmap[:,part[0],:,:] = tmp
+
+    return heatmap
+
+
 
 def test():
 

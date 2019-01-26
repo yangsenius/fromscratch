@@ -1,7 +1,8 @@
 model:
     keypoints_num: 17
     init_weights: True
-    pretrained_path: ''
+    use_pretrained: True
+    pretrained_path: 'ckpt/resnet50-19c8e357.pth'
     input_size: 
         w: 288
         h: 384
@@ -17,8 +18,9 @@ model:
 
     extra_mask_module: true
     extra_feature_flag: true
+    feature_dim: 64
     
-    booster_stacks: 1 # meta-booster nums
+    booster_stacks: 4 # meta-booster nums
     boosting_requirement: 0.4
 
 images_root_dir: '/home/public_dataset/coco/images/'
@@ -31,18 +33,17 @@ train:
     lr: 0.001
     lr_step_size: 30
     lr_decay_gamma: 0.4
-    batchsize: 64
+    batchsize: 72
     heatmap_peak_sigma_factor: 3
+
+    augmentation: true
     aug_scale: 0.3
     aug_rotation: 40
-    aug_flip: false
-    augmentation: true
-
-    #
-    mask_loss_weight: 0.5
-
+    aug_flip: true
+    aug_occlusion: false
     
-
+    # extra
+    mask_loss_weight: 0.5
     
     
 test:

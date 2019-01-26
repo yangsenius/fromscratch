@@ -28,6 +28,10 @@ class cocodataset(Dataset):
                                                             augment=False,
                                                             **kwargs):
         super(cocodataset,self).__init__()
+        
+        ###############
+        # basic setting
+        ###############
         self.mode = mode
         logger.info("\n+=+=+=+=+= dataset:{} +=+=+=+=+=".format(mode))
         self.score_threshold = config.test.bbox_score_threshold
@@ -38,22 +42,30 @@ class cocodataset(Dataset):
         self.transform = transform
         self.margin_to_border = config.model.margin_to_border  # input border/bbox border
 
-        ## data augmentation setting
+        ###########################
+        # data augmentation setting
+        ###########################
         self.augment = augment
         if self.augment:
             self.aug_scale = config.train.aug_scale
             self.aug_rotation = config.train.aug_rotation
             self.flip = config.train.aug_flip
-            logger.info('augmentation is used for training, setting :scale=1±{},rotation=0±{},flip(p=0.5)={}'
-                            .format(self.aug_scale,self.aug_rotation,self.flip))
+            self.random_occlusion = config.train.aug_occlusion
+            logger.info(
+                "augmentation is used for training, setting :\nscale=1±{},rotation=0±{},flip(p=0.5)={},random_occlusion={}"
+                .format(self.aug_scale,self.aug_rotation,self.flip,self.random_occlusion))
         else:
             logger.info('augmentation is not used ')
 
+        # use mask information or not
         self.use_mask = config.model.only_add_mask_channel or config.model.extra_mask_module
         logger.info('need the grountruth mask information == {}'.format(self.use_mask))
-    
-        if self.mode != 'dt':
-            ## load train or val groundtruth data
+
+        ####################################
+        # load train or val groundtruth data
+        ####################################
+        if self.mode == 'train' or self.mode == 'val':
+           
             self.images_root = os.path.join(images_dir ,mode +'2017')
 
             self.coco=COCO( os.path.join(annotions_path,'person_keypoints_{}2017.json'.format(mode)))   # train or val
@@ -72,9 +84,11 @@ class cocodataset(Dataset):
                     [1.0,1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0])                                                                                      
             logger.info('@ Standard deviation of gaussian kernel for different keypoints heatmaps is:\n==> {} '
                                                 .format(self.sigmas))
-
+        ########################
+        # load detection results
+        ########################
         if self.mode == 'dt':
-            ## load detection results
+            
             self.images_root = os.path.join(images_dir,dataset +'2017')
             self.annotations = json.load( open(annotions_path,'r')) # dt.json
             self.data = self.get_dt_db()
@@ -164,20 +178,35 @@ class cocodataset(Dataset):
         
         return container
 
-    def make_affine_matrix(self, bbox, target_size, margin=1, aug_rotation= 0, aug_scale=1):
+
+    def make_affine_matrix(self, bbox, target_size, margin=1.2, aug_rotation= 0, aug_scale=1):
         """
         transform bbox ROI to adapat the net-input size
-        
+
+        `margin`: determine the distance between the bbox and input border
+
+                                    input
+                                 __________
+                                |  ______  |
+                                |-|      |-|
+                                |-| bbox |-|
+                                |-|      |-|
+                                |-|______|-|
+                                |__________|
+
         t: 3x3 matrix, means transform BBOX-ROI to input center-roi
 
-        rs: 3x3 matrix , means augmentation of rotation and scale
+        rs: 3x3 matrix , means augmentation of rotation and scale   
 
         """
 
         (w,h)=target_size
+
+        #choose small-proportion side to make scaling
         scale = min((w/margin) /bbox[2],
                     (h/margin) /bbox[3])
-        #choose small-proportion side to make scaling
+        
+        # transform 
         t = np.zeros((3, 3))
         offset_X= w/2 - scale*(bbox[0]+bbox[2]/2)
         offset_Y= h/2 - scale*(bbox[1]+bbox[3]/2)
@@ -187,6 +216,7 @@ class cocodataset(Dataset):
         t[1, 2] = offset_Y
         t[2, 2] = 1
 
+        # augmentation
         theta = aug_rotation*np.pi/180
         alpha = np.cos(theta)*aug_scale
         beta = np.sin(theta)*aug_scale
@@ -202,8 +232,8 @@ class cocodataset(Dataset):
         # matrix multiply
         # first: t , orignal-transform
         # second: rs, augment scale and augment rotation
-        final_t = np.dot(rs,t)
-        return final_t
+        final_matrix = np.dot(rs,t)
+        return final_matrix
 
     def kpt_affine(self,keypoints,affine_matrix):
         '[17*3] ==affine==> [17,3]'
@@ -212,7 +242,7 @@ class cocodataset(Dataset):
         for id,points in enumerate(keypoints):
             if points[2]==0:
                 continue
-            vis = points[2] # python value bug
+            vis = points[2] # prevent python value bug
             points[2] = 1
             keypoints[id][0:2] = np.dot(affine_matrix, points)[0:2]
             keypoints[id][2] = vis 
@@ -250,19 +280,83 @@ class cocodataset(Dataset):
                 heatmap_gt[id,gt_y,gt_x] = 1
                 heatmap_gt[id,:,:] = gaussian(heatmap_gt[id,:,:],sigma=self.sigmas[id])#*sigma_loose)
                 amx = np.amax(heatmap_gt[id])
-                heatmap_gt[id] /= amx  # make the max value of heatmap equals 1
-                #loose = 2/kpt_visible[id] # loose = 2: loose punishment for invisible label keypoints
-                #heatmap_gt[id] /= loose 
+                heatmap_gt[id] /= amx  # make the max value of heatmap equal 1
+
+                if self.random_occlusion:
+                    # reducing the max-value to represent low-confidence
+                    loose = 2/kpt_visible[id] # loose = 2: loose punishment for invisible label keypoints
+                    heatmap_gt[id] /= loose 
 
         kpt_visible = kpt_visible > 0
         kpt_visible = kpt_visible.astype(np.float32)
         
         return heatmap_gt, kpt_visible
 
+    def Random_Occlusion_Augmentation(self,input,keypoints,size=(21,21),probability=0.5,block_nums = 2):
+        """
+        We adopt a `Random Occlusion Augmentation` strategy to make the model robust to  feature Ambiguity caused by 
+        occlusion . For human pose estimation , the most important objective of learning is to learn the information or 
+        knowledge of the constraint between skeleton joints and try to omit the image feature interference from other 
+        objects . 
+        
+        In another word, the structure feature is more crucial than local image feature for human body keypoint detection
+
+        We put a specified size `black block` to occlude the input image with certain probability in any region
+
+        and if the groundtruth keypoint fall into the `black block` region, we make the heatmap peak value  of  
+        corresponding keypoint equal to half the original value ,such as `1 reduce to 0.5`  
+
+        This `reducing max-value` method will be implemented in the function: `self.make_gt_heatmaps()`
+
+                                 __________
+                                |  *     * |
+                                |     [*]  |  
+                                |  *    *  |
+                                |   [ ]    |
+                                |        * |
+                                |__________|   
+
+        [ ] : means random `black block`
+         *  : means keypoints
+        Arg:    
+
+            `input`:        (H,W,3)   
+            `keypoints`:    (C,3)       c * [x , y, visibility]
+            `size`:         a tuple of odd integer number such as (5,5) (3,5) 
+            `probability`:  the probability of using `Random_Occlusion_Augmentation` for each sample
+            `block_nums`:   how many blocks will be used in occlusion
+        
+        Return:
+
+            Augmented `input`:(H,W,3) and `keypoints`: (C,3)
+        
+        """
+        w,   h = input.shape[1], input.shape[0]
+        rx, ry = (size[0]-1)/2 , (size[1]-1)/2 # block radius
+       
+        if np.random.random() <= probability:
+
+            for num in range(block_nums):
+
+                x,  y  = np.random.randint(w), np.random.randint(h) # block center 
+                left ,top ,right, bottom = int(max(0,x-rx)), int(max(0,y-ry)), int(min(x+rx,w)), int(min(y+ry,h)) #block region
+               
+                input[top:bottom,left:right,:] = 0  # zero value
+
+                # judge the keypoint's visibility  ; `*` here means `and` operation for bool array
+                keypoints[:,2]= np.where( (left <= keypoints[:,0] <= right) *     
+                                        (top <= keypoints[:,1] <= bottom) * 
+                                        (keypoints[:,1]!=0) * (keypoints[:,0]!=0),  # consideration for keypoint [0,0,0]
+                                        1 ,keypoints[:,2] )  # True: = 1 invisible keypoints    False: keep original 
+        
+        return input, keypoints
+        
+
     def __len__(self,):
 
         return len(self.data)
 
+    
     def __getitem__(self,id):
 
         data = self.data[id]
@@ -275,17 +369,11 @@ class cocodataset(Dataset):
         mask     =  data['mask'] if 'mask' in data else ''
 
         image_path = self.get_image_path(file_name)
-        #(h,w,3)
-        input_data = cv2.imread( image_path )
+        input_data = cv2.imread( image_path ) #(h,w,3)
 
-        #if self.mode != 'train':
-            # when inferencing, 
-            # we expect the input without the interference from outside bbox
-        #    input = input_data.copy()
-        #    input_data = np.zeros_like(input,dtype=np.uint8)
-        #    input_data[bbox[1]:bbox[1]+bbox[3],bbox[0]:bbox[0]+bbox[2],:] = \
-        #                            input[bbox[1]:bbox[1]+bbox[3],bbox[0]:bbox[0]+bbox[2],:]
-
+        ###################################
+        # rotation and rescale augmentation
+        ###################################
         if self.mode == 'train' and self.augment == True:
             s = self.aug_scale # 0.3
             r = self.aug_rotation #30^.
@@ -295,58 +383,96 @@ class cocodataset(Dataset):
         else:
             aug_scale = 1
             aug_rotation = 0
-            self.margin_to_border = 1.1
+            self.margin_to_border = 1.2 # rescale
 
+        ###################################
+        # transform the image to input size
+        
         affine_matrix = self.make_affine_matrix(bbox,self.input_size,
                                                 margin = self.margin_to_border,
                                                 aug_scale=aug_scale,
                                                 aug_rotation=aug_rotation)
 
         input_data = cv2.warpAffine(input_data,affine_matrix[[0,1],:], self.input_size,)
+        
+        info = {}
+        info['index'] = index
 
+        #################################
+        # add mask information to dataset 
+        #################################
         if mask is not '':
 
             mask = cv2.warpAffine(mask      ,affine_matrix[[0,1],:], self.input_size) #note! mask:(h_,w_,1)->(h,w)
             mask = cv2.resize(mask,self.heatmap_size)
             mask = mask.astype(np.float32)
-            mask = mask[np.newaxis,:,:] #(1,h,w,x) or(1,h,w)
+            mask = mask[np.newaxis,:,:]     #(1,h,w,x) or(1,h,w)
 
-            ## mask may be divided into several parts( ndim =4)
-            ## we make them into a singel heatmap
+            # mask may be divided into several parts( ndim =4) we make them into a singel heatmap
             if mask.ndim == 4:
                 mask = np.amax(mask,axis=3)
 
-        if self.transform is not None:
-            #  torchvision.transforms.ToTensor() :
-            #  (H,W,3) range [0,255] numpy.ndarray  ==> (c,h,w) [0.0,1.0] torch.FloatTensor
-            input_data = self.transform(input_data)
-
-        info = {}
-        info['index'] = index
-
-        if mask is not '':
-            info['prior_mask'] = mask
-
+        ############
+        # train mode 
+        ############
         if self.mode == 'train':
 
             keypoints = self.kpt_affine(keypoints,affine_matrix)
 
-            ## flip with 0.5 probability
-            if self.augment and self.flip and np.random.random() <= 0.5 and self.transform is not None and mask is not '':
+            # flip with 0.5 probability
+            if self.augment and self.flip and np.random.random() <= 0.5 and self.transform is not None :
 
-                input_data = torch.flip(input_data,[2])
-                mask = torch.from_numpy(mask)
-                mask = torch.flip(mask,[2]).numpy()
-                
-                keypoints[:,0] = self.input_size[0] - 1 - keypoints[:,0] 
+                input_data = torch.from_numpy(input_data).flip([2]).numpy()
+                keypoints[:,0] = self.input_size[0] - 1 - keypoints[:,0] # change coordinate value
+                keypoints = symmetric_exchange_after_flip(keypoints) # change channel order
+
+                if mask is not '':
+                    mask = np.flip(mask,2)
+                    info['prior_mask'] = mask
+            
+            ########################################
+            # Random Occlusion Augmentation strategy
+            ########################################
+            if self.random_occlusion:
+                input_data,keypoints = self.Random_Occlusion_Augmentation(input_data,keypoints,probability = 0.5)
 
             heatmap_gt, kpt_visible = self.make_gt_heatmaps(keypoints)
             
+            if self.transform is not None:#  torchvision.transforms.ToTensor() and normalize()
+                #  (H,W,3) range [0,255] numpy.ndarray  ==> (c,h,w) [0.0,1.0] =>[-1.0,1.0] torch.FloatTensor
+                input_data = self.transform(input_data)
+            
             return input_data , heatmap_gt, kpt_visible, info
 
+        ####################
+        # valid or test mode
+        ####################
         if self.mode == 'val' or self.mode =='dt':
 
+            if self.transform is not None:
+                input_data = self.transform(input_data)
+
             return input_data , image_id  , score, np.linalg.inv(affine_matrix), np.array(bbox), info 
+
+
+##############################################################################
+###########################  Utilization Functions    ########################
+##############################################################################
+
+
+def symmetric_exchange_after_flip(keypoints_flip):
+    "flip will make the left-right body parts exchange"
+    
+    parts = [[1,2],[3,4],[5,6],[7,8],[9,10],[11,12],[13,14],[15,16]]
+
+    keypoints = keypoints_flip.copy()
+    for part in parts:
+
+        tmp = keypoints[part[1],:].copy()
+        keypoints[part[1],:] = keypoints[part[0],:].copy()
+        keypoints[part[0],:] = tmp
+
+    return keypoints
 
 def bbox_rectify(width,height,bbox,keypoints,margin=5):
         """
@@ -375,9 +501,9 @@ def test():
     from easydict import EasyDict as edict
     config = edict( yaml.load( open('../config.yaml','r')))
 
-    dataset_root_dir = '../../data/coco/images/'
-    annotation_root_dir = '../../data/coco/annotations/'
-    person_detection_results_path = '../../data/coco/person_detection_results/COCO_val2017_detections_AP_H_56_person.json'
+    dataset_root_dir = '/home/public_dataset/coco/images/'
+    annotation_root_dir = '/home/public_dataset/coco/annotations/'
+    person_detection_results_path = '/home/public_dataset/coco/person_detection_results/COCO_val2017_detections_AP_H_56_person.json'
 
     torch_transform = torchvision.transforms.Compose([
                             torchvision.transforms.ToTensor(),
@@ -387,11 +513,7 @@ def test():
                             #        std=[0.229, 0.224, 0.225])
                             ])
 
-    '''dataset = cocodataset(  dataset_root_dir,
-                            person_detection_results_path,
-                            mode = 'dt',
-                            dataset = 'val',
-                            transform = torch_transform)'''
+    
     dataset = cocodataset(  config,
                             dataset_root_dir,
                             annotation_root_dir,
@@ -403,15 +525,14 @@ def test():
 
 
 
-    tup = dataset[34]  #112234
+    tup = dataset[0]  #112234
     print(tup)
 
     x = tup[0]
     print(tup[2])
     print(x.dtype)
-    if x.dtype == torch.float32:
-        x = np.array(x).transpose(1,2,0)
-    print(x)
+    x = x.permute(1,2,0).numpy()
+    cv2.imwrite('test_occlusion.jpg',x*255)
 
 
 
