@@ -95,9 +95,25 @@ def main():
                             ]))
 
 
-    train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size = config.train.batchsize, shuffle = True , num_workers = 4 , pin_memory=True )
-    valid_dataloader = torch.utils.data.DataLoader(valid_dataset, batch_size = config.test.batchsize, shuffle = False , num_workers = 4 , pin_memory=True )
+    train_dataloader_init = torch.utils.data.DataLoader(train_dataset, 
+                                                    batch_size = config.train.batchsize, 
+                                                    shuffle = True , 
+                                                    num_workers = 4 , 
+                                                    pin_memory=True )
 
+    valid_dataloader = torch.utils.data.DataLoader(valid_dataset, 
+                                                    batch_size = config.test.batchsize, 
+                                                    shuffle = False , 
+                                                    num_workers = 4 , 
+                                                    pin_memory=True )
+
+    train_dataset.augmentation_reset(aug_occlusion=False)
+
+    train_dataloader_no_occ =  torch.utils.data.DataLoader(train_dataset, 
+                                                            batch_size = config.train.batchsize, 
+                                                            shuffle = True , 
+                                                            num_workers = 4 , 
+                                                            pin_memory=True )
 
     begin, end = config.train.epoch_begin, config.train.epoch_end
 
@@ -111,7 +127,13 @@ def main():
     for epoch in range(begin, end):
         logger.info('==>training...')
         scheduler.step()
-        
+
+        if epoch > 20:
+            # random occlusion begin from epoch 20
+            train_dataloader = train_dataloader_init
+        else:
+            train_dataloader = train_dataloader_no_occ
+
         for iters, (input, heatmap_gt, kpt_visible,  info) in enumerate(train_dataloader):
             
             start = timer()

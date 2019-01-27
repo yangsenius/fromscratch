@@ -40,7 +40,7 @@ train:
     aug_scale: 0.3
     aug_rotation: 40
     aug_flip: true
-    aug_occlusion: false
+    aug_occlusion: true
     
     # extra
     mask_loss_weight: 0.5

@@ -183,9 +183,11 @@ class cocodataset(Dataset):
         """
         transform bbox ROI to adapat the net-input size
 
-        `margin`: determine the distance between the bbox and input border
+        `margin`: determine the distance between the bbox and input border . default: 1.2
+        `aug_rotation`: the rotation angle of augmentation, range from [0,180]. default: 0
+        `aug_scale`: the rescale size of augmentation . default: 1
 
-                                    input
+                                 target_size
                                  __________
                                 |  ______  |
                                 |-|      |-|
@@ -304,16 +306,16 @@ class cocodataset(Dataset):
         We put a specified size `black block` to occlude the input image with certain probability in any region
 
         and if the groundtruth keypoint fall into the `black block` region, we make the heatmap peak value  of  
-        corresponding keypoint equal to half the original value ,such as `1 reduce to 0.5`  
+        corresponding keypoint equal to half the original value ,such as `reduce 1  to 0.5`  
 
         This `reducing max-value` method will be implemented in the function: `self.make_gt_heatmaps()`
 
                                  __________
-                                |  *     * |
-                                |     [*]  |  
-                                |  *    *  |
-                                |   [ ]    |
-                                |        * |
+                                |    *     |
+                                |   * [*]  |  
+                                | *      * |
+                                |  *[ ]*   |
+                                |  *   *   |
                                 |__________|   
 
         [ ] : means random `black block`
@@ -344,8 +346,8 @@ class cocodataset(Dataset):
                 input[top:bottom,left:right,:] = 0  # zero value
 
                 # judge the keypoint's visibility  ; `*` here means `and` operation for bool array
-                keypoints[:,2]= np.where( (left <= keypoints[:,0] <= right) *     
-                                        (top <= keypoints[:,1] <= bottom) * 
+                keypoints[:,2]= np.where((left <= keypoints[:,0])* (keypoints[:,0] <= right) *     
+                                        (top <= keypoints[:,1] ) * (keypoints[:,1] <= bottom)*
                                         (keypoints[:,1]!=0) * (keypoints[:,0]!=0),  # consideration for keypoint [0,0,0]
                                         1 ,keypoints[:,2] )  # True: = 1 invisible keypoints    False: keep original 
         
@@ -355,6 +357,23 @@ class cocodataset(Dataset):
     def __len__(self,):
 
         return len(self.data)
+    
+    def augmentation_reset(self,aug_flip=None,
+                                aug_scale=None,
+                                aug_rotation=None,
+                                aug_occlusion=None):
+        
+        if aug_flip is not None:
+            self.flip = aug_flip  
+        if aug_scale is not None:
+            self.aug_scale = aug_scale
+        if aug_rotation is not None:
+            self.aug_rotation =  aug_rotation 
+        if aug_occlusion is not None:
+            self.random_occlusion = aug_occlusion 
+
+        return None
+
 
     
     def __getitem__(self,id):
@@ -380,14 +399,8 @@ class cocodataset(Dataset):
             aug_scale = np.clip(np.random.randn()*s + 1, 1 - s, 1 + s)
             aug_rotation = np.clip(np.random.randn()*r, -r, r) 
 
-        else:
-            aug_scale = 1
-            aug_rotation = 0
-            self.margin_to_border = 1.2 # rescale
-
         ###################################
         # transform the image to input size
-        
         affine_matrix = self.make_affine_matrix(bbox,self.input_size,
                                                 margin = self.margin_to_border,
                                                 aug_scale=aug_scale,
@@ -402,7 +415,6 @@ class cocodataset(Dataset):
         # add mask information to dataset 
         #################################
         if mask is not '':
-
             mask = cv2.warpAffine(mask      ,affine_matrix[[0,1],:], self.input_size) #note! mask:(h_,w_,1)->(h,w)
             mask = cv2.resize(mask,self.heatmap_size)
             mask = mask.astype(np.float32)
